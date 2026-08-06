@@ -1,0 +1,6 @@
+После распаковки удалите файл:
+C:\chat-app\src\components\CallOverlay.jsx
+
+Он больше не используется — его заменил CallPanel.jsx.
+Команда для PowerShell:
+Remove-Item C:\chat-app\src\components\CallOverlay.jsx

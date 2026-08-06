@@ -1,0 +1,298 @@
+﻿=== CallOverlay.jsx ===
+import { useEffect, useRef, useState } from 'react';
+import { QUALITY } from '../hooks/useCall';
+
+const initials = (n) => (n || '?').slice(0, 2).toUpperCase();
+
+const PATHS = {
+  mic: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zm7 10a7 7 0 0 1-6 6.92V22h-2v-3.08A7 7 0 0 1 5 12h2a5 5 0 0 0 10 0h2z',
+  micOff:
+    'M3.28 2 2 3.28l5 5V12a5 5 0 0 0 7.55 4.28l1.45 1.45A6.94 6.94 0 0 1 13 18.92V22h-2v-3.08A7 7 0 0 1 5 12h2a5 5 0 0 0 .1 1l13.62 8.72L22 20.72 3.28 2zM15 11.72V5a3 3 0 0 0-5.9-.72L15 11.72z',
+  cam: 'M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z',
+  camOff:
+    'M3.28 2 2 3.28 3.72 5H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12c.2 0 .38-.06.54-.16L20.72 22 22 20.72 3.28 2zM17 10.5l4-4v11l-1.3-1.3L17 13.5v-3z',
+  screen:
+    'M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6H4z',
+  end: 'M12 9c-1.6 0-3.15.25-4.6.7v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.98.98 0 0 1-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .27-.11.52-.29.7l-2.48 2.46c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z',
+  call: 'M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z',
+  minimize: 'M6 13h12v-2H6z',
+  expand: 'M4 4h7v2H6v5H4V4zm9 0h7v7h-2V6h-5V4zM4 13h2v5h5v2H4v-7zm14 0h2v7h-7v-2h5v-5z',
+};
+
+const Icon = ({ name, size = 20 }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden="true">
+    <path d={PATHS[name]} />
+  </svg>
+);
+
+export default function CallOverlay({ callApi, peerName, myName, deafened, volume = 100 }) {
+  const {
+    call,
+    remoteStream,
+    remoteVideoOn,
+    localVideo,
+    micOn,
+    cameraOn,
+    screenOn,
+    quality,
+    stats,
+    acceptCall,
+    endCall,
+    toggleMic,
+    toggleCamera,
+    toggleScreen,
+    setQuality,
+  } = callApi;
+
+  const remoteRef = useRef(null);
+  const localRef = useRef(null);
+  const audioRef = useRef(null);
+  const boxRef = useRef(null);
+  const dragRef = useRef(null);
+
+  const [soundBlocked, setSoundBlocked] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+  const [pos, setPos] = useState(null); // null = стоит в углу по умолчанию
+
+  useEffect(() => {
+    if (remoteRef.current && remoteRef.current.srcObject !== remoteStream) {
+      remoteRef.current.srcObject = remoteStream ?? null;
+    }
+  }, [remoteStream, remoteVideoOn]);
+
+  useEffect(() => {
+    if (localRef.current) localRef.current.srcObject = localVideo ?? null;
+  }, [localVideo]);
+
+  // Звук собеседника идёт отдельным элементом — так надёжнее
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (el.srcObject !== remoteStream) el.srcObject = remoteStream ?? null;
+    if (!remoteStream) return;
+
+    const id = localStorage.getItem('chat.spk');
+    if (id && typeof el.setSinkId === 'function') {
+      el.setSinkId(id).catch((e) => console.warn('Наушники не выбрались, играем в устройство по умолчанию:', e));
+    }
+
+    el.volume = Math.min(1, Math.max(0, volume / 100));
+    el.muted = !!deafened;
+    el.play()
+      .then(() => setSoundBlocked(false))
+      .catch((e) => {
+        console.warn('Браузер не дал включить звук:', e);
+        setSoundBlocked(true);
+      });
+  }, [remoteStream, deafened, volume]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.muted = !!deafened;
+    audioRef.current.volume = Math.min(1, Math.max(0, volume / 100));
+  }, [deafened, volume]);
+
+  // Входящий звонок всегда разворачиваем, чтобы не пропустить
+  useEffect(() => {
+    if (call?.status === 'incoming') setMinimized(false);
+  }, [call?.status]);
+
+  // Новый звонок — окно снова в углу
+  useEffect(() => {
+    if (!call) {
+      setPos(null);
+      setMinimized(false);
+    }
+  }, [call]);
+
+  // Если окно вынесли за край (уменьшили браузер) — возвращаем в видимую зону
+  useEffect(() => {
+    const onResize = () => {
+      setPos((p) => {
+        if (!p) return p;
+        const el = boxRef.current;
+        if (!el) return p;
+        return {
+          x: Math.min(p.x, Math.max(0, window.innerWidth - el.offsetWidth)),
+          y: Math.min(p.y, Math.max(0, window.innerHeight - el.offsetHeight)),
+        };
+      });
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const unmute = async () => {
+    try {
+      await audioRef.current?.play();
+      setSoundBlocked(false);
+    } catch (e) {
+      alert('Не удалось включить звук: ' + e.message);
+    }
+  };
+
+  const onHeadPointerDown = (e) => {
+    if (e.target.closest('button')) return; // по кнопкам не таскаем
+    const el = boxRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    dragRef.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    setPos({ x: r.left, y: r.top });
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const onHeadPointerMove = (e) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const el = boxRef.current;
+    const w = el?.offsetWidth ?? 0;
+    const h = el?.offsetHeight ?? 0;
+    setPos({
+      x: Math.min(Math.max(0, e.clientX - d.dx), Math.max(0, window.innerWidth - w)),
+      y: Math.min(Math.max(0, e.clientY - d.dy), Math.max(0, window.innerHeight - h)),
+    });
+  };
+
+  const onHeadPointerUp = (e) => {
+    dragRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  if (!call) return null;
+
+  const incoming = call.status === 'incoming';
+  const active = call.status === 'active';
+  const status = incoming ? 'Входящий звонок' : active ? '' : 'Вызываем…';
+
+  const boxStyle = pos ? { position: 'fixed', left: pos.x, top: pos.y, margin: 0 } : undefined;
+
+  return (
+    <div className="dc-backdrop">
+      <div
+        ref={boxRef}
+        className={minimized ? 'dc-call mini' : 'dc-call'}
+        style={boxStyle}
+      >
+        <div
+          className="dc-head"
+          onPointerDown={onHeadPointerDown}
+          onPointerMove={onHeadPointerMove}
+          onPointerUp={onHeadPointerUp}
+          onPointerCancel={onHeadPointerUp}
+        >
+          <span className="dc-head-name">{peerName}</span>
+          {status && <span className="dc-head-status">{status}</span>}
+          {!incoming && (
+            <button
+              className="dc-head-btn"
+              onClick={() => setMinimized((v) => !v)}
+              title={minimized ? 'Развернуть' : 'Свернуть'}
+            >
+              <Icon name={minimized ? 'expand' : 'minimize'} size={16} />
+            </button>
+          )}
+        </div>
+
+        <audio ref={audioRef} autoPlay playsInline />
+        {soundBlocked && (
+          <button className="dc-unmute" onClick={unmute}>
+            Нажмите, чтобы включить звук
+          </button>
+        )}
+
+        <div className="dc-stage">
+          {/* Собеседник */}
+          <div className="dc-tile">
+            {remoteVideoOn ? (
+              <video ref={remoteRef} autoPlay playsInline muted className="dc-video" />
+            ) : (
+              <>
+                <div className={incoming || !active ? 'dc-avatar ringing' : 'dc-avatar'}>
+                  {initials(peerName)}
+                </div>
+                <div className="dc-tile-name">{peerName}</div>
+              </>
+            )}
+          </div>
+
+          {/* Ты */}
+          <div className="dc-tile">
+            {localVideo ? (
+              <video
+                ref={localRef}
+                autoPlay
+                playsInline
+                muted
+                className={screenOn ? 'dc-video' : 'dc-video mirrored'}
+              />
+            ) : (
+              <>
+                <div className="dc-avatar self">{initials(myName)}</div>
+                <div className="dc-tile-name">{myName}</div>
+              </>
+            )}
+            {localVideo && stats && (
+              <div className="dc-stat">
+                {stats.w}×{stats.h} · {stats.fps} fps
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="dc-pill">
+          {incoming ? (
+            <>
+              <button className="dc-btn accept" onClick={acceptCall} title="Ответить">
+                <Icon name="call" />
+              </button>
+              <button className="dc-btn hangup" onClick={endCall} title="Отклонить">
+                <Icon name="end" />
+              </button>
+            </>
+          ) : (
+            <>
+              <button className={micOn ? 'dc-btn' : 'dc-btn off'} onClick={toggleMic} title="Микрофон">
+                <Icon name={micOn ? 'mic' : 'micOff'} />
+              </button>
+              <button
+                className={cameraOn ? 'dc-btn on' : 'dc-btn'}
+                onClick={toggleCamera}
+                disabled={!active}
+                title="Камера"
+              >
+                <Icon name={cameraOn ? 'cam' : 'camOff'} />
+              </button>
+              <button
+                className={screenOn ? 'dc-btn on' : 'dc-btn'}
+                onClick={toggleScreen}
+                disabled={!active}
+                title="Демонстрация экрана"
+              >
+                <Icon name="screen" />
+              </button>
+              <select
+                className="dc-quality"
+                value={quality}
+                onChange={(e) => setQuality(e.target.value)}
+                title="Качество"
+              >
+                {Object.entries(QUALITY).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+              <button className="dc-btn hangup" onClick={endCall} title="Завершить">
+                <Icon name="end" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
