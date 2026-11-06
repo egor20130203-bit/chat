@@ -65,8 +65,19 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
         mode === 'raw'
           ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
           : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-      if (device) audio.deviceId = { ideal: device };
-      const st = await navigator.mediaDevices.getUserMedia({ audio });
+      let st;
+      if (device) {
+        // Строгий выбор: «ideal» WebView2 игнорирует и хватает микрофон по умолчанию
+        try {
+          st = await navigator.mediaDevices.getUserMedia({
+            audio: { ...audio, deviceId: { exact: device } },
+          });
+        } catch (_) {
+          st = await navigator.mediaDevices.getUserMedia({ audio });
+        }
+      } else {
+        st = await navigator.mediaDevices.getUserMedia({ audio });
+      }
       if (stop || my !== session) {
         st.getTracks().forEach((t) => t.stop());
         return;

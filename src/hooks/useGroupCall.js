@@ -288,8 +288,18 @@ export function useGroupCall(myId, myName) {
         const audio = raw
           ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
           : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-        if (preferred) audio.deviceId = { ideal: preferred };
-        const stream = await navigator.mediaDevices.getUserMedia({ audio });
+        let stream;
+        if (preferred) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: { ...audio, deviceId: { exact: preferred } },
+            });
+          } catch (_) {
+            stream = await navigator.mediaDevices.getUserMedia({ audio });
+          }
+        } else {
+          stream = await navigator.mediaDevices.getUserMedia({ audio });
+        }
         micStreamRef.current = stream;
         const startMuted = localStorage.getItem('chat.startMuted') === '1';
         if (startMuted) {
@@ -382,8 +392,18 @@ export function useGroupCall(myId, myName) {
       const audio = raw
         ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-      if (deviceId) audio.deviceId = { ideal: deviceId };
-      const stream = await navigator.mediaDevices.getUserMedia({ audio });
+      let stream;
+      if (deviceId) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { ...audio, deviceId: { exact: deviceId } },
+          });
+        } catch (_) {
+          stream = await navigator.mediaDevices.getUserMedia({ audio });
+        }
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({ audio });
+      }
       micStreamRef.current = stream;
 
       let outStream = stream;
