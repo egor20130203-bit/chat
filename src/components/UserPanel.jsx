@@ -10,6 +10,7 @@ export default function UserPanel({
   profile,
   myStatus,
   callApi,
+  groupCallApi,
   deafened,
   onToggleDeafen,
   onSpkVolume,
@@ -80,12 +81,13 @@ export default function UserPanel({
     setEditing(false);
   };
 
-  const inCall = !!callApi?.call;
-  const muted = inCall ? callApi?.micOn === false : selfMuted;
+  const inCall = !!callApi?.call || !!groupCallApi?.call;
+  const activeCallApi = callApi?.call ? callApi : groupCallApi;
+  const muted = inCall ? activeCallApi?.micOn === false : selfMuted;
 
   const toggleMicBtn = () => {
     if (inCall) {
-      callApi?.toggleMic?.();
+      activeCallApi?.toggleMic?.();
       return;
     }
     const next = !selfMuted;
@@ -101,7 +103,14 @@ export default function UserPanel({
         <AudioMenu
           kind={audioMenu}
           onClose={() => setAudioMenu(null)}
-          onMicVolume={(v) => callApi?.setMicGain?.(v / 100)}
+          onMicVolume={(v) => {
+            callApi?.setMicGain?.(v / 100);
+            groupCallApi?.setMicGain?.(v / 100);
+          }}
+          onMicDevice={(id) => {
+            callApi?.setMicDevice?.(id);
+            groupCallApi?.setMicDevice?.(id);
+          }}
           onSpkVolume={onSpkVolume}
         />
       )}

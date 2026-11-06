@@ -297,6 +297,7 @@ export function useGroupCall(myId, myName) {
         let outStream = stream;
         try {
           const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          ctx.resume?.().catch(() => {});
           const src = ctx.createMediaStreamSource(stream);
           const gain = ctx.createGain();
           const saved = parseFloat(localStorage.getItem('chat.micVolume') ?? '100');
@@ -357,6 +358,61 @@ export function useGroupCall(myId, myName) {
   const setMicGain = useCallback((value) => {
     localStorage.setItem('chat.micVolume', String(Math.round(value * 100)));
     if (gainRef.current) gainRef.current.gain.value = value;
+  }, []);
+
+  // Горячая смена микрофона прямо во время звонка (для всех участников)
+  const setMicDevice = useCallback(async (deviceId) => {
+    localStorage.setItem('chat.mic', deviceId ?? '');
+    if (!channelRef.current) return; // вне звонка — применится при входе
+    try {
+      const oldTrack = outTrackRef.current ?? micStreamRef.current?.getAudioTracks()[0];
+      const wasEnabled = oldTrack ? oldTrack.enabled : true;
+
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      outTrackRef.current?.stop();
+      audioCtxRef.current?.close().catch(() => {});
+      audioCtxRef.current = null;
+      gainRef.current = null;
+
+      const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      if (deviceId) audio.deviceId = { ideal: deviceId };
+      const stream = await navigator.mediaDevices.getUserMedia({ audio });
+      micStreamRef.current = stream;
+
+      let outStream = stream;
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        ctx.resume?.().catch(() => {});
+        const src = ctx.createMediaStreamSource(stream);
+        const gain = ctx.createGain();
+        const saved = parseFloat(localStorage.getItem('chat.micVolume') ?? '100');
+        gain.gain.value = Number.isFinite(saved) ? saved / 100 : 1;
+        const dest = ctx.createMediaStreamDestination();
+        src.connect(gain).connect(dest);
+        audioCtxRef.current = ctx;
+        gainRef.current = gain;
+        outStream = dest.stream;
+      } catch (e) {
+        console.warn('Регулятор громкости недоступен, шлём микрофон напрямую:', e);
+      }
+
+      const newTrack = outStream.getAudioTracks()[0];
+      if (!newTrack) return;
+      newTrack.enabled = wasEnabled;
+      outTrackRef.current = newTrack;
+
+      for (const entry of Object.values(peersRef.current)) {
+        const sender = entry.pc.getSenders().find((s) => s.track?.kind === 'audio');
+        if (sender) {
+          try {
+            await sender.replaceTrack(newTrack);
+          } catch (_) {}
+        }
+      }
+      setMicOn(wasEnabled);
+    } catch (e) {
+      alert('Не удалось переключить микрофон: ' + e.message);
+    }
   }, []);
 
   const toggleMic = useCallback(() => {
@@ -507,6 +563,7 @@ export function useGroupCall(myId, myName) {
     leave,
     toggleMic,
     setMicGain,
+    setMicDevice,
     toggleCamera,
     toggleScreen,
     setResolution,

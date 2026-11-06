@@ -17,6 +17,7 @@ export default function Sidebar({
   unreadRooms = {},
   myStatus,
   callApi,
+  groupCallApi,
   deafened,
   onToggleDeafen,
   onSpkVolume,
@@ -114,6 +115,7 @@ export default function Sidebar({
         profile={profile}
         myStatus={myStatus}
         callApi={callApi}
+        groupCallApi={groupCallApi}
         deafened={deafened}
         onToggleDeafen={onToggleDeafen}
         onSpkVolume={onSpkVolume}
@@ -121,7 +123,7 @@ export default function Sidebar({
         onProfileChange={onProfileChange}
         onSignOut={onSignOut}
       />
-      <div className="sb-version">Scalable Chat v1.2.0</div>
+      <div className="sb-version">Scalable Chat v1.2.1</div>
     </aside>
   );
 }

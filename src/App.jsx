@@ -265,6 +265,7 @@ export default function App() {
         unreadRooms={unreadRooms}
         myStatus={myShownStatus}
         callApi={callApi}
+        groupCallApi={groupCallApi}
         deafened={deafened}
         onToggleDeafen={() => setDeafened((v) => !v)}
         onSpkVolume={setSpkVolume}

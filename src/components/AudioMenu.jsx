@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Icon from './Icons';
 
 // Всплывающее меню у стрелочки: выбор устройства и громкость
-export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume }) {
+export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onMicDevice }) {
   const isMic = kind === 'mic';
   const [devices, setDevices] = useState([]);
   const [device, setDevice] = useState(
@@ -48,6 +48,7 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume }) {
   const pickDevice = (id) => {
     setDevice(id);
     localStorage.setItem(isMic ? 'chat.mic' : 'chat.spk', id);
+    if (isMic) onMicDevice?.(id); // переключаем на лету, даже в звонке
   };
 
   const changeVolume = (v) => {
@@ -96,7 +97,7 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume }) {
       <div className="am-hint">
         <Icon name="gear" size={14} />
         {isMic
-          ? 'Устройство применится к следующему звонку'
+          ? 'Устройство переключается сразу, даже в звонке'
           : 'Громкость меняется сразу'}
       </div>
     </div>
