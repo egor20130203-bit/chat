@@ -284,7 +284,10 @@ export function useGroupCall(myId, myName) {
       try {
         // Микрофон через регулятор громкости — как в личном звонке
         const preferred = localStorage.getItem('chat.mic');
-        const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+        const raw = localStorage.getItem('chat.audioProcessing') === 'off';
+        const audio = raw
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
         if (preferred) audio.deviceId = { ideal: preferred };
         const stream = await navigator.mediaDevices.getUserMedia({ audio });
         micStreamRef.current = stream;
@@ -375,7 +378,10 @@ export function useGroupCall(myId, myName) {
       audioCtxRef.current = null;
       gainRef.current = null;
 
-      const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      const raw = localStorage.getItem('chat.audioProcessing') === 'off';
+      const audio = raw
+        ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
       if (deviceId) audio.deviceId = { ideal: deviceId };
       const stream = await navigator.mediaDevices.getUserMedia({ audio });
       micStreamRef.current = stream;

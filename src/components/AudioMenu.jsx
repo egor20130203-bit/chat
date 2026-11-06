@@ -14,6 +14,8 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
   const [level, setLevel] = useState(0);
   const [meterErr, setMeterErr] = useState(null);
   const [retry, setRetry] = useState(0);
+  const [captureLabel, setCaptureLabel] = useState('');
+  const [meterMode, setMeterMode] = useState('');
   const boxRef = useRef(null);
 
   useEffect(() => {
@@ -38,51 +40,88 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
     load();
   }, []);
 
-  // Живой индикатор уровня микрофона — показывает, слышит ли выбранное устройство
+  // Живой индикатор уровня микрофона — показывает, слышит ли выбранное устройство.
+  // Если 4 секунды тишина — сам переключается между режимами «с обработкой» и «без»
+  // (на некоторых системах шумодав глушит микрофон в ноль) и запоминает рабочий.
   useEffect(() => {
     if (!isMic) return;
     if (devices.length > 0 && !devices[0].label) return; // нет доступа — нечего мерить
     let stop = false;
+    let session = 0;
     let ctx, stream, raf;
-    (async () => {
-      try {
-        setMeterErr(null);
-        const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-        if (device) audio.deviceId = { ideal: device };
-        stream = await navigator.mediaDevices.getUserMedia({ audio });
-        if (stop) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
-        await ctx.resume?.().catch(() => {});
-        if (ctx.state !== 'running') throw new Error('звуковой движок спит — кликни по полоске');
-        const src = ctx.createMediaStreamSource(stream);
-        const an = ctx.createAnalyser();
-        an.fftSize = 256;
-        src.connect(an);
-        const data = new Uint8Array(an.frequencyBinCount);
-        const loop = () => {
-          if (stop) return;
-          an.getByteTimeDomainData(data);
-          let peak = 0;
-          for (let i = 0; i < data.length; i++) {
-            const v = Math.abs(data[i] - 128) / 128;
-            if (v > peak) peak = v;
-          }
-          setLevel(Math.min(100, Math.round(peak * 150)));
-          raf = requestAnimationFrame(loop);
-        };
-        loop();
-      } catch (e) {
-        setMeterErr(e.message ?? String(e));
-      }
-    })();
-    return () => {
-      stop = true;
+    const cleanupRun = () => {
       cancelAnimationFrame(raf);
       stream?.getTracks().forEach((t) => t.stop());
       ctx?.close().catch(() => {});
+      stream = null;
+      ctx = null;
+    };
+
+    const start = async (mode) => {
+      const my = ++session;
+      setMeterErr(null);
+      setMeterMode(mode === 'raw' ? 'без обработки' : 'с обработкой');
+      const audio =
+        mode === 'raw'
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      if (device) audio.deviceId = { ideal: device };
+      const st = await navigator.mediaDevices.getUserMedia({ audio });
+      if (stop || my !== session) {
+        st.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      stream = st;
+      setCaptureLabel(st.getAudioTracks()[0]?.label ?? '');
+      const cx = new (window.AudioContext || window.webkitAudioContext)();
+      await cx.resume?.().catch(() => {});
+      if (cx.state !== 'running') {
+        cx.close().catch(() => {});
+        throw new Error('звуковой движок спит — кликни по полоске');
+      }
+      ctx = cx;
+      const src = cx.createMediaStreamSource(st);
+      const an = cx.createAnalyser();
+      an.fftSize = 256;
+      src.connect(an);
+      const data = new Uint8Array(an.frequencyBinCount);
+      const startedAt = Date.now();
+      let heardSomething = false;
+      const loop = () => {
+        if (stop || my !== session) return;
+        an.getByteTimeDomainData(data);
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = Math.abs(data[i] - 128) / 128;
+          if (v > peak) peak = v;
+        }
+        const lvl = Math.min(100, Math.round(peak * 150));
+        setLevel(lvl);
+        if (lvl > 4) {
+          heardSomething = true;
+          // Этот режим работает — запоминаем его для звонков
+          localStorage.setItem('chat.audioProcessing', mode === 'raw' ? 'off' : 'on');
+        }
+        if (!heardSomething && Date.now() - startedAt > 4000) {
+          cleanupRun();
+          start(mode === 'raw' ? 'processed' : 'raw').catch((e) =>
+            setMeterErr(e.message ?? String(e))
+          );
+          return;
+        }
+        raf = requestAnimationFrame(loop);
+      };
+      loop();
+    };
+
+    start(localStorage.getItem('chat.audioProcessing') === 'off' ? 'raw' : 'processed').catch(
+      (e) => setMeterErr(e.message ?? String(e))
+    );
+
+    return () => {
+      stop = true;
+      session++;
+      cleanupRun();
     };
   }, [isMic, device, devices, retry]);
 
@@ -160,12 +199,13 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
           <div className="am-meter" onClick={() => setRetry((r) => r + 1)} style={{ cursor: 'pointer' }}>
             <i style={{ width: level + '%' }} />
           </div>
+          {captureLabel && <div className="am-meter-hint">Захватываю: {captureLabel}</div>}
           <div className="am-meter-hint">
             {meterErr
               ? `⚠️ ${meterErr}`
               : level > 3
                 ? '✅ Микрофон работает'
-                : 'Полоска не двигается — выбери другое устройство выше'}
+                : `Полоска не двигается — пробую разные режимы (${meterMode})…`}
           </div>
         </div>
       )}
