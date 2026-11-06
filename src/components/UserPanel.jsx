@@ -80,7 +80,7 @@ export default function UserPanel({
         <AudioMenu
           kind={audioMenu}
           onClose={() => setAudioMenu(null)}
-          onMicVolume={(v) => callApi?.setMicVolume?.(v)}
+          onMicVolume={(v) => callApi?.setMicGain?.(v / 100)}
           onSpkVolume={onSpkVolume}
         />
       )}

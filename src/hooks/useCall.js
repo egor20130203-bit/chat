@@ -130,9 +130,6 @@ export function useCall(myId) {
     gainRef.current = null;
     audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
-    audioCtxRef.current?.close().catch(() => {});
-    audioCtxRef.current = null;
-    gainRef.current = null;
     micStreamRef.current = null;
     videoStreamRef.current = null;
     videoSenderRef.current = null;
@@ -233,13 +230,15 @@ export function useCall(myId) {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       const src = ctx.createMediaStreamSource(stream);
       const gain = ctx.createGain();
-      const saved = parseFloat(localStorage.getItem('chat.micVolume') ?? '1');
-      gain.gain.value = Number.isFinite(saved) ? saved : 1;
+      // В настройках громкость хранится в процентах (0–200), здесь нужен множитель
+      const saved = parseFloat(localStorage.getItem('chat.micVolume') ?? '100');
+      gain.gain.value = Number.isFinite(saved) ? saved / 100 : 1;
       const dest = ctx.createMediaStreamDestination();
       src.connect(gain).connect(dest);
       audioCtxRef.current = ctx;
       gainRef.current = gain;
       outStream = dest.stream;
+      outTrackRef.current = dest.stream.getAudioTracks()[0] ?? null;
     } catch (e) {
       console.warn('Регулятор громкости недоступен, шлём микрофон напрямую:', e);
     }
@@ -327,7 +326,8 @@ export function useCall(myId) {
   }, [call, sendTo, cleanup]);
 
   const setMicGain = useCallback((value) => {
-    localStorage.setItem('chat.micVolume', String(value));
+    // value — множитель (0–2), в настройках храним проценты (0–200)
+    localStorage.setItem('chat.micVolume', String(Math.round(value * 100)));
     if (gainRef.current) gainRef.current.gain.value = value;
   }, []);
 
@@ -487,6 +487,8 @@ export function useCall(myId) {
         const collision = makingOfferRef.current || pc.signalingState !== 'stable';
         if (collision && !polite) return;
         try {
+          // Вежливая сторона откатывает свой оффер при одновременном звонке
+          if (collision) await pc.setLocalDescription({ type: 'rollback' });
           await answerOffer(from, payload.sdp);
         } catch (e) {
           console.error('offer:', e);

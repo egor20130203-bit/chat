@@ -17,7 +17,7 @@ export default function App() {
   const [view, setView] = useState('friends');
   const [deafened, setDeafened] = useState(false);
   const [spkVolume, setSpkVolume] = useState(
-    () => Number(localStorage.getItem('chat.spkVolume')) || 100
+    () => Number(localStorage.getItem('chat.spkVolume') ?? 100)
   );
   const [loading, setLoading] = useState(true);
 
@@ -32,7 +32,21 @@ export default function App() {
 
   const loadProfile = useCallback(async (userId) => {
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
-    if (data) setProfile(data);
+    if (data) {
+      setProfile(data);
+      return;
+    }
+    // Профиля нет (например, не сработал триггер) — создаём сами
+    const { data: u } = await supabase.auth.getUser();
+    const email = u?.user?.email ?? '';
+    const display =
+      u?.user?.user_metadata?.full_name ?? u?.user?.user_metadata?.name ?? email.split('@')[0] ?? 'user';
+    const { data: created } = await supabase
+      .from('profiles')
+      .insert({ id: userId, email, display_name: display })
+      .select()
+      .maybeSingle();
+    if (created) setProfile(created);
   }, []);
 
   const loadContacts = useCallback(async () => {

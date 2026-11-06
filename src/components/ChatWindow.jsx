@@ -43,9 +43,10 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
           `and(sender_id.eq.${profile.id},recipient_id.eq.${contact.id}),` +
             `and(sender_id.eq.${contact.id},recipient_id.eq.${profile.id})`
         )
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
         .limit(300);
-      if (alive) setMessages(data ?? []);
+      // Берём последние 300, а показываем в хронологическом порядке
+      if (alive) setMessages((data ?? []).reverse());
     })();
 
     const ch = supabase

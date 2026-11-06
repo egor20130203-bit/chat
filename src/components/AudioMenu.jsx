@@ -9,7 +9,7 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume }) {
     () => localStorage.getItem(isMic ? 'chat.mic' : 'chat.spk') || ''
   );
   const [volume, setVolume] = useState(() =>
-    Number(localStorage.getItem(isMic ? 'chat.micVolume' : 'chat.spkVolume')) || 100
+    Number(localStorage.getItem(isMic ? 'chat.micVolume' : 'chat.spkVolume') ?? 100)
   );
   const boxRef = useRef(null);
 
