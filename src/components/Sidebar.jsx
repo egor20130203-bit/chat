@@ -12,6 +12,9 @@ export default function Sidebar({
   view,
   peers,
   unread = {},
+  rooms = [],
+  activeRoom,
+  unreadRooms = {},
   myStatus,
   callApi,
   deafened,
@@ -20,6 +23,8 @@ export default function Sidebar({
   onChangeStatus,
   onProfileChange,
   onSelect,
+  onSelectRoom,
+  onCreateGroup,
   onOpenFriends,
   onSignOut,
 }) {
@@ -73,6 +78,36 @@ export default function Sidebar({
             </button>
           );
         })}
+      </div>
+
+      <div className="section-label">
+        Группы
+        <button className="section-add" onClick={onCreateGroup} title="Создать группу">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+
+      <div className="contact-list">
+        {rooms.length === 0 && <div className="empty">Нет групп. Создайте свою!</div>}
+        {rooms
+          .filter((r) => r.name.toLowerCase().includes(q.trim().toLowerCase()))
+          .map((r) => {
+            const n = unreadRooms[r.id] ?? 0;
+            const cls =
+              (activeRoom?.id === r.id && view === 'room' ? 'contact active' : 'contact') +
+              (n > 0 ? ' has-unread' : '');
+            return (
+              <button key={r.id} className={cls} onClick={() => onSelectRoom(r)}>
+                <span className="avatar group-avatar">
+                  <Icon name="users" size={16} />
+                </span>
+                <span className="contact-text">
+                  <span className="contact-name">{r.name}</span>
+                </span>
+                {n > 0 && <span className="unread-badge">{n > 99 ? '99+' : n}</span>}
+              </button>
+            );
+          })}
       </div>
 
       <UserPanel

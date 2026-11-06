@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from './lib/supabase';
 import { desktop } from './lib/desktop';
 import { useCall } from './hooks/useCall';
+import { useGroupCall } from './hooks/useGroupCall';
 import { usePresence } from './hooks/usePresence';
 import Auth from './components/Auth';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
+import RoomWindow from './components/RoomWindow';
+import CreateGroup from './components/CreateGroup';
 import FriendsView from './components/FriendsView';
 
 export default function App() {
@@ -15,8 +18,13 @@ export default function App() {
   const [requests, setRequests] = useState([]);
   const [outgoing, setOutgoing] = useState([]);
   const [unread, setUnread] = useState({});
+  const [rooms, setRooms] = useState([]);
+  const [unreadRooms, setUnreadRooms] = useState({});
   const [active, setActive] = useState(null);
+  const [activeRoom, setActiveRoom] = useState(null);
   const [view, setView] = useState('friends');
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const profilesCache = useRef({});
   const [deafened, setDeafened] = useState(false);
   const [spkVolume, setSpkVolume] = useState(
     () => Number(localStorage.getItem('chat.spkVolume') ?? 100)
@@ -78,16 +86,28 @@ export default function App() {
     );
   }, [session]);
 
+  const loadRooms = useCallback(async () => {
+    if (!session?.user) return;
+    const { data } = await supabase
+      .from('room_members')
+      .select('room_id, rooms(id, name, owner_id, created_at)')
+      .eq('user_id', session.user.id);
+    setRooms((data ?? []).map((r) => r.rooms).filter(Boolean));
+  }, [session]);
+
   useEffect(() => {
     if (session?.user) {
       loadProfile(session.user.id);
       loadContacts();
+      loadRooms();
     } else {
       setProfile(null);
       setContacts([]);
+      setRooms([]);
       setActive(null);
+      setActiveRoom(null);
     }
-  }, [session, loadProfile, loadContacts]);
+  }, [session, loadProfile, loadContacts, loadRooms]);
 
   // Заявки и новые друзья появляются без обновления страницы
   useEffect(() => {
@@ -99,10 +119,27 @@ export default function App() {
     return () => supabase.removeChannel(ch);
   }, [session, loadContacts]);
 
+  // Меня добавили в группу или убрали — обновляем список
+  useEffect(() => {
+    if (!session?.user) return;
+    const ch = supabase
+      .channel('rooms_watch')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, loadRooms)
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [session, loadRooms]);
+
   // Входящие сообщения: считаем непрочитанные и показываем уведомления
   useEffect(() => {
     if (!session?.user) return;
     const me = session.user.id;
+    const notify = (title, body) => {
+      if (desktop?.notify) desktop.notify(title, body);
+      else if ('Notification' in window) {
+        if (Notification.permission === 'granted') new Notification(title, { body });
+        else if (Notification.permission === 'default') Notification.requestPermission();
+      }
+    };
     const ch = supabase
       .channel('inbox_watch')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: row }) => {
@@ -113,15 +150,36 @@ export default function App() {
         const from = contacts.find((c) => c.id === row.sender_id);
         const title = from?.display_name ?? 'Новое сообщение';
         const body = row.content || `📎 ${row.attachment_name ?? 'Файл'}`;
-        if (desktop?.notify) desktop.notify(title, body);
-        else if ('Notification' in window) {
-          if (Notification.permission === 'granted') new Notification(title, { body });
-          else if (Notification.permission === 'default') Notification.requestPermission();
-        }
+        notify(title, body);
       })
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'room_messages' },
+        async ({ new: row }) => {
+          if (row.sender_id === me) return;
+          const roomOpen = view === 'room' && activeRoom?.id === row.room_id;
+          if (roomOpen) return;
+          setUnreadRooms((u) => ({ ...u, [row.room_id]: (u[row.room_id] ?? 0) + 1 }));
+          const room = rooms.find((r) => r.id === row.room_id);
+          let name = profilesCache.current[row.sender_id];
+          if (!name) {
+            const { data: pr } = await supabase
+              .from('profiles')
+              .select('display_name')
+              .eq('id', row.sender_id)
+              .maybeSingle();
+            name = pr?.display_name ?? 'Кто-то';
+            profilesCache.current[row.sender_id] = name;
+          }
+          const body = row.content || `📎 ${row.attachment_name ?? 'Файл'}`;
+          notify(room ? `${name} · ${room.name}` : name, body);
+        }
+      )
       .subscribe();
     return () => supabase.removeChannel(ch);
-  }, [session, contacts, active, view]);
+  }, [session, contacts, active, activeRoom, view, rooms]);
+
+  const groupCallApi = useGroupCall(session?.user?.id ?? null, profile?.display_name ?? 'Я');
 
   const callApi = useCall(session?.user?.id ?? null);
   const { peers, myShownStatus, changeStatus } = usePresence(
@@ -132,8 +190,8 @@ export default function App() {
   // Говорим десктопному приложению, идёт ли звонок:
   // без звонка свёрнутое окно засыпает и не ест FPS в играх
   useEffect(() => {
-    desktop?.setInCall?.(!!callApi.call);
-  }, [callApi.call]);
+    desktop?.setInCall?.(!!callApi.call || !!groupCallApi.call);
+  }, [callApi.call, groupCallApi.call]);
 
   const openChat = (c) => {
     setActive(c);
@@ -141,6 +199,39 @@ export default function App() {
     // Открыли переписку — сбрасываем счётчик непрочитанных
     setUnread((u) => (u[c.id] ? { ...u, [c.id]: 0 } : u));
   };
+
+  const openRoom = (r) => {
+    setActiveRoom(r);
+    setView('room');
+    setUnreadRooms((u) => (u[r.id] ? { ...u, [r.id]: 0 } : u));
+  };
+
+  const createRoom = async (name, memberIds) => {
+    const me = session.user.id;
+    const { data: room, error } = await supabase
+      .from('rooms')
+      .insert({ name, owner_id: me })
+      .select()
+      .single();
+    if (error) {
+      alert('Группа не создалась: ' + error.message);
+      return;
+    }
+    const rows = [me, ...memberIds].map((uid) => ({ room_id: room.id, user_id: uid }));
+    const { error: mErr } = await supabase.from('room_members').insert(rows);
+    if (mErr) alert('Участники не добавились: ' + mErr.message);
+    setShowCreateGroup(false);
+    await loadRooms();
+    openRoom(room);
+  };
+
+  // Если группу удалили или меня убрали — закрываем её
+  useEffect(() => {
+    if (activeRoom && !rooms.some((r) => r.id === activeRoom.id)) {
+      setActiveRoom(null);
+      if (view === 'room') setView('friends');
+    }
+  }, [rooms, activeRoom, view]);
 
   const peerName = contacts.find((c) => c.id === callApi.call?.peerId)?.display_name ?? 'Собеседник';
 
@@ -169,6 +260,9 @@ export default function App() {
         view={view}
         peers={peers}
         unread={unread}
+        rooms={rooms}
+        activeRoom={activeRoom}
+        unreadRooms={unreadRooms}
         myStatus={myShownStatus}
         callApi={callApi}
         deafened={deafened}
@@ -177,6 +271,8 @@ export default function App() {
         onChangeStatus={changeStatus}
         onProfileChange={setProfile}
         onSelect={openChat}
+        onSelectRoom={openRoom}
+        onCreateGroup={() => setShowCreateGroup(true)}
         onOpenFriends={() => setView('friends')}
         onSignOut={() => supabase.auth.signOut()}
       />
@@ -192,6 +288,15 @@ export default function App() {
           onOpenChat={openChat}
           onCall={(c) => callApi.startCall(c.id)}
         />
+      ) : view === 'room' ? (
+        <RoomWindow
+          profile={profile}
+          room={activeRoom}
+          peers={peers}
+          groupCallApi={groupCallApi}
+          deafened={deafened}
+          volume={spkVolume}
+        />
       ) : (
         <ChatWindow
           profile={profile}
@@ -206,6 +311,13 @@ export default function App() {
         />
       )}
 
+      {showCreateGroup && (
+        <CreateGroup
+          contacts={contacts}
+          onClose={() => setShowCreateGroup(false)}
+          onCreate={createRoom}
+        />
+      )}
     </div>
   );
 }

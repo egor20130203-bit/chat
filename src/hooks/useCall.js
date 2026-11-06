@@ -10,12 +10,12 @@ export const RESOLUTIONS = {
 export const FPS_OPTIONS = [30, 60, 90, 120];
 
 // Битрейт под разрешение и fps — так считают Discord-подобные приложения
-function bitrateFor(width, height, fps) {
+export function bitrateFor(width, height, fps) {
   const raw = Math.round((width * height * fps * 0.1) / 100_000) * 100_000;
   return Math.min(Math.max(raw, 600_000), 40_000_000);
 }
 
-function mediaPreset(resKey, fps) {
+export function mediaPreset(resKey, fps) {
   const r = RESOLUTIONS[resKey] ?? RESOLUTIONS.r1080;
   return { width: r.width, height: r.height, fps, bitrate: bitrateFor(r.width, r.height, fps) };
 }

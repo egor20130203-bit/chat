@@ -664,3 +664,95 @@ button { touch-action: manipulation; }
   background: var(--bg-raise); color: var(--text); font-size: 13px;
 }
 .ava-upload:hover { filter: brightness(1.2); }
+
+/* ---------- Группы ---------- */
+.section-label { display: flex; align-items: center; justify-content: space-between; padding-right: 8px; }
+.section-add {
+  width: 22px; height: 22px; border: none; border-radius: 5px; cursor: pointer;
+  background: transparent; color: var(--muted); display: grid; place-items: center;
+  transition: background .12s, color .12s;
+}
+.section-add:hover { background: var(--bg-raise); color: var(--text); }
+
+.group-avatar {
+  width: 36px; height: 36px; border-radius: 50%; background: var(--bg-raise);
+  display: grid; place-items: center; color: var(--muted); flex: none;
+}
+.contact.active .group-avatar, .contact:hover .group-avatar { color: var(--text); }
+
+.chat-group-icon {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--bg-raise);
+  display: grid; place-items: center; color: var(--muted); flex: none;
+}
+
+/* Баннер «идёт звонок» */
+.call-banner {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  background: rgba(35, 165, 90, .12); border-bottom: 1px solid rgba(35, 165, 90, .35);
+  color: #7de2a8; font-size: 14px;
+}
+.call-banner button {
+  margin-left: auto; padding: 7px 16px; border: none; border-radius: 16px; cursor: pointer;
+  background: var(--ok); color: #fff; font-weight: 600; font-size: 13px;
+  transition: background .12s, transform .08s;
+}
+.call-banner button:hover { background: #1f8f4e; }
+.call-banner button:active { transform: scale(.96); }
+.call-banner button:disabled { opacity: .45; cursor: default; }
+
+/* Сетка группового звонка */
+.dc-grid {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px; padding: 14px 14px 72px; align-content: start;
+}
+.dc-grid .dc-tile { height: 170px; max-width: none; flex: none; }
+.dc-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+
+/* Список участников группы */
+.member-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.member-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px;
+}
+.member-row:hover { background: var(--bg-raise); }
+.member-name { font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-crown { margin-left: 6px; color: #f0b132; font-size: 12px; }
+
+/* Модальное окно (создание группы) */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .65);
+  display: grid; place-items: center; animation: fadeIn .12s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  width: 420px; max-width: calc(100vw - 32px); max-height: 80vh; overflow-y: auto;
+  background: var(--bg-main); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px; box-shadow: 0 16px 48px rgba(0, 0, 0, .55);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.modal-head h3 { margin: 0; font-size: 18px; }
+.modal-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.modal-label input {
+  width: 100%; margin-top: 6px; padding: 10px 12px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg-deep); color: var(--text);
+}
+.cg-list {
+  display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto;
+  margin-bottom: 16px; padding: 4px; border-radius: 8px; background: var(--bg-deep);
+}
+.cg-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text); cursor: pointer; text-align: left;
+  transition: background .12s;
+}
+.cg-row:hover { background: var(--bg-raise); }
+.cg-row.picked { background: rgba(88, 101, 242, .18); }
+.cg-check { margin-left: auto; color: var(--accent); display: grid; place-items: center; width: 20px; }
+.modal-submit {
+  width: 100%; padding: 11px; border: none; border-radius: 8px; cursor: pointer;
+  background: var(--accent); color: #fff; font-weight: 600; font-size: 14px;
+  transition: background .12s, transform .08s;
+}
+.modal-submit:hover { background: var(--accent-hi); }
+.modal-submit:active { transform: scale(.98); }
+.modal-submit:disabled { opacity: .5; cursor: default; }
