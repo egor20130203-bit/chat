@@ -103,6 +103,12 @@ export default function App() {
     profile?.activity ?? null
   );
 
+  // Говорим десктопному приложению, идёт ли звонок:
+  // без звонка свёрнутое окно засыпает и не ест FPS в играх
+  useEffect(() => {
+    window.chatDesktop?.setInCall?.(!!callApi.call);
+  }, [callApi.call]);
+
   const openChat = (c) => {
     setActive(c);
     setView('chat');

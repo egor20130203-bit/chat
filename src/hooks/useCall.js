@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-export const QUALITY = {
-  hd60: { label: '720p 60', width: 1280, height: 720, fps: 60, bitrate: 4_000_000 },
-  fhd120: { label: 'Full HD 120', width: 1920, height: 1080, fps: 120, bitrate: 12_000_000 },
-  qhd90: { label: '2K 90', width: 2560, height: 1440, fps: 90, bitrate: 18_000_000 },
-  uhd60: { label: '4K 60', width: 3840, height: 2160, fps: 60, bitrate: 32_000_000 },
+export const RESOLUTIONS = {
+  r720: { label: '720p', width: 1280, height: 720 },
+  r1080: { label: '1080p', width: 1920, height: 1080 },
+  r1440: { label: '1440p (2K)', width: 2560, height: 1440 },
+  r2160: { label: '2160p (4K)', width: 3840, height: 2160 },
 };
+export const FPS_OPTIONS = [30, 60, 90, 120];
+
+// Битрейт под разрешение и fps — так считают Discord-подобные приложения
+function bitrateFor(width, height, fps) {
+  const raw = Math.round((width * height * fps * 0.1) / 100_000) * 100_000;
+  return Math.min(Math.max(raw, 600_000), 40_000_000);
+}
+
+function mediaPreset(resKey, fps) {
+  const r = RESOLUTIONS[resKey] ?? RESOLUTIONS.r1080;
+  return { width: r.width, height: r.height, fps, bitrate: bitrateFor(r.width, r.height, fps) };
+}
 
 const ICE = {
   iceServers: [
@@ -54,7 +66,8 @@ export function useCall(myId) {
   const [micOn, setMicOn] = useState(true);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
-  const [quality, setQualityState] = useState('fhd120');
+  const [resolution, setResState] = useState('r1080');
+  const [fps, setFpsState] = useState(60);
   const [stats, setStats] = useState(null);
   const [remoteVideoOn, setRemoteVideoOn] = useState(false);
 
@@ -69,7 +82,9 @@ export function useCall(myId) {
   const makingOfferRef = useRef(false);
   const acceptedRef = useRef(false);
   const peerRef = useRef(null);
-  const qualityRef = useRef('fhd120');
+  const resRef = useRef('r1080');
+  const fpsRef = useRef(60);
+  const mediaRef = useRef(mediaPreset('r1080', 60));
   const audioCtxRef = useRef(null);
   const gainRef = useRef(null);
   const outTrackRef = useRef(null);
@@ -150,7 +165,7 @@ export function useCall(myId) {
 
   const applyBitrate = useCallback(async (sender, isScreen) => {
     if (!sender) return;
-    const preset = QUALITY[qualityRef.current];
+    const preset = mediaRef.current;
     try {
       const params = sender.getParameters();
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
@@ -374,7 +389,7 @@ export function useCall(myId) {
 
   const toggleCamera = useCallback(async () => {
     if (cameraOn) return stopVideo();
-    const p = QUALITY[qualityRef.current];
+    const p = mediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -393,7 +408,7 @@ export function useCall(myId) {
 
   const toggleScreen = useCallback(async () => {
     if (screenOn) return stopVideo();
-    const p = QUALITY[qualityRef.current];
+    const p = mediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
@@ -411,26 +426,44 @@ export function useCall(myId) {
     }
   }, [screenOn, stopVideo, setVideoTrack]);
 
-  const setQuality = useCallback(
-    async (key) => {
-      qualityRef.current = key;
-      setQualityState(key);
-      const p = QUALITY[key];
+  const applyMediaPreset = useCallback(
+    async (isScreen) => {
+      const p = mediaRef.current;
       const track = videoStreamRef.current?.getVideoTracks()[0];
-      if (track) {
-        try {
-          await track.applyConstraints({
-            width: { ideal: p.width },
-            height: { ideal: p.height },
-            frameRate: { ideal: p.fps },
-          });
-        } catch (e) {
-          console.warn('Устройство не тянет пресет:', e);
-        }
-        await applyBitrate(videoSenderRef.current, screenOn);
+      if (!track) return;
+      try {
+        await track.applyConstraints({
+          width: { ideal: p.width },
+          height: { ideal: p.height },
+          frameRate: { ideal: p.fps },
+        });
+      } catch (e) {
+        console.warn('Устройство не тянет пресет:', e);
       }
+      await applyBitrate(videoSenderRef.current, isScreen);
     },
-    [applyBitrate, screenOn]
+    [applyBitrate]
+  );
+
+  const setResolution = useCallback(
+    async (key) => {
+      resRef.current = key;
+      setResState(key);
+      mediaRef.current = mediaPreset(key, fpsRef.current);
+      await applyMediaPreset(screenOn);
+    },
+    [applyMediaPreset, screenOn]
+  );
+
+  const setFps = useCallback(
+    async (value) => {
+      const n = Number(value) || 60;
+      fpsRef.current = n;
+      setFpsState(n);
+      mediaRef.current = mediaPreset(resRef.current, n);
+      await applyMediaPreset(screenOn);
+    },
+    [applyMediaPreset, screenOn]
   );
 
   useEffect(() => {
@@ -560,7 +593,8 @@ export function useCall(myId) {
     micOn,
     cameraOn,
     screenOn,
-    quality,
+    resolution,
+    fps,
     stats,
     startCall,
     acceptCall,
@@ -569,6 +603,7 @@ export function useCall(myId) {
     setMicGain,
     toggleCamera,
     toggleScreen,
-    setQuality,
+    setResolution,
+    setFps,
   };
 }

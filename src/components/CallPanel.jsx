@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { QUALITY } from '../hooks/useCall';
+import { RESOLUTIONS, FPS_OPTIONS } from '../hooks/useCall';
 
 const initials = (n) => (n || '?').slice(0, 2).toUpperCase();
 
@@ -31,14 +31,16 @@ export default function CallPanel({ callApi, peerName, myName, deafened, volume 
     micOn,
     cameraOn,
     screenOn,
-    quality,
+    resolution,
+    fps,
     stats,
     acceptCall,
     endCall,
     toggleMic,
     toggleCamera,
     toggleScreen,
-    setQuality,
+    setResolution,
+    setFps,
   } = callApi;
 
   const remoteRef = useRef(null);
@@ -182,13 +184,25 @@ export default function CallPanel({ callApi, peerName, myName, deafened, volume 
             </button>
             <select
               className="dc-quality"
-              value={quality}
-              onChange={(e) => setQuality(e.target.value)}
-              title="Качество"
+              value={resolution}
+              onChange={(e) => setResolution(e.target.value)}
+              title="Разрешение"
             >
-              {Object.entries(QUALITY).map(([k, v]) => (
+              {Object.entries(RESOLUTIONS).map(([k, v]) => (
                 <option key={k} value={k}>
                   {v.label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="dc-quality"
+              value={fps}
+              onChange={(e) => setFps(e.target.value)}
+              title="Кадры в секунду"
+            >
+              {FPS_OPTIONS.map((f) => (
+                <option key={f} value={f}>
+                  {f} fps
                 </option>
               ))}
             </select>
