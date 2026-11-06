@@ -72,7 +72,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 .notice { color: #86e0a1; font-size: 13px; margin-bottom: 10px; }
 
 /* ---------- Каркас ---------- */
-.app { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+.app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
 
 .sidebar { background: var(--bg-side); display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 .sidebar-head { padding: 16px; border-bottom: 1px solid var(--line); }
@@ -496,7 +496,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 .up-chev:hover { color: #fff; }
 
 .am-menu {
-  position: absolute; right: 8px; bottom: calc(100% + 8px); width: 268px; z-index: 45;
+  position: absolute; left: 8px; right: 8px; bottom: calc(100% + 8px); z-index: 45;
   background: #111216; border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, .6); padding: 12px;
 }
