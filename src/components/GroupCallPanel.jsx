@@ -13,6 +13,7 @@ const PATHS = {
   screen:
     'M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6H4z',
   end: 'M12 9c-1.6 0-3.15.25-4.6.7v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.98.98 0 0 1-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .27-.11.52-.29.7l-2.48 2.46c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z',
+  expand: 'M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z',
 };
 
 const Icon = ({ name }) => (
@@ -84,6 +85,16 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
   const avatarOf = (p) => memberMap[p.id]?.avatar_url ?? p.avatar_url ?? null;
 
   const hasVideo = localVideo || others.some((p) => remoteStreams[p.id]?.videoOn);
+  // Пресеты показывают качество активного источника: демка приоритетнее камеры
+  const qualityTitle = screenOn ? 'Качество демонстрации' : 'Качество камеры';
+
+  // Фуллскрин плитки: кнопка в углу или двойной клик по видео (как в Discord)
+  const fsTile = (e) => {
+    const tile = e.currentTarget.closest('.dc-tile');
+    if (!tile) return;
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else tile.requestFullscreen().catch(() => {});
+  };
 
   return (
     <div className={hasVideo ? 'dc-panel tall' : 'dc-panel'}>
@@ -96,7 +107,7 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
 
       <div className="dc-grid">
         {/* Я */}
-        <div className="dc-tile">
+        <div className={localVideo ? 'dc-tile video' : 'dc-tile'} onDoubleClick={localVideo ? fsTile : undefined}>
           {localVideo ? (
             <>
               <video
@@ -106,6 +117,9 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
                 muted
                 className={screenOn ? 'dc-video' : 'dc-video mirrored'}
               />
+              <button className="dc-fs" onClick={fsTile} title="На весь экран">
+                <Icon name="expand" />
+              </button>
               {stats && (
                 <div className="dc-stat">
                   {stats.w}×{stats.h} · {stats.fps} fps
@@ -117,21 +131,31 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
               {myProfile.avatar_url ? <img src={myProfile.avatar_url} alt="" /> : initials(myProfile.display_name)}
             </div>
           )}
-          <div className="dc-tile-name">{myProfile.display_name} (вы)</div>
+          <div className={localVideo ? 'dc-nametag' : 'dc-tile-name'}>{myProfile.display_name} (вы)</div>
         </div>
 
         {/* Остальные участники */}
         {others.map((p) => {
           const rs = remoteStreams[p.id];
           const av = avatarOf(p);
+          const videoOn = !!rs?.videoOn;
           return (
-            <div className="dc-tile" key={p.id}>
-              {rs?.videoOn ? (
-                <RemoteVideo stream={rs.stream} className="dc-video" />
+            <div
+              className={videoOn ? 'dc-tile video' : 'dc-tile'}
+              key={p.id}
+              onDoubleClick={videoOn ? fsTile : undefined}
+            >
+              {videoOn ? (
+                <>
+                  <RemoteVideo stream={rs.stream} className="dc-video" />
+                  <button className="dc-fs" onClick={fsTile} title="На весь экран">
+                    <Icon name="expand" />
+                  </button>
+                </>
               ) : (
                 <div className="dc-avatar">{av ? <img src={av} alt="" /> : initials(nameOf(p))}</div>
               )}
-              <div className="dc-tile-name">{nameOf(p)}</div>
+              <div className={videoOn ? 'dc-nametag' : 'dc-tile-name'}>{nameOf(p)}</div>
             </div>
           );
         })}
@@ -159,7 +183,7 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
           className="dc-quality"
           value={resolution}
           onChange={(e) => setResolution(e.target.value)}
-          title="Разрешение"
+          title={qualityTitle}
         >
           {Object.entries(RESOLUTIONS).map(([k, v]) => (
             <option key={k} value={k}>
@@ -171,7 +195,7 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
           className="dc-quality"
           value={fps}
           onChange={(e) => setFps(e.target.value)}
-          title="Кадры в секунду"
+          title={qualityTitle + ' — кадры в секунду'}
         >
           {FPS_OPTIONS.map((f) => (
             <option key={f} value={f}>

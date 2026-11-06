@@ -874,3 +874,29 @@ button { touch-action: manipulation; }
   transition: width .08s linear;
 }
 .am-meter-hint { margin-top: 6px; font-size: 11px; color: var(--muted); }
+
+/* ---------- Звонок: фуллскрин и оверлеи как в Discord ---------- */
+.dc-tile.video { background: #000; }
+.dc-nametag {
+  position: absolute; left: 8px; bottom: 8px; z-index: 3;
+  padding: 3px 10px; border-radius: 6px; background: rgba(0, 0, 0, .65);
+  font-size: 13px; font-weight: 600; color: #fff; pointer-events: none;
+  max-width: calc(100% - 60px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dc-fs {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 32px; height: 32px; border-radius: 6px; border: none; cursor: pointer;
+  background: rgba(0, 0, 0, .55); color: #e3e5e8;
+  display: grid; place-items: center; opacity: 0; transition: opacity .12s, background .12s;
+}
+.dc-tile:hover .dc-fs { opacity: 1; }
+.dc-fs:hover { background: rgba(0, 0, 0, .85); color: #fff; }
+.dc-fs svg { width: 18px; height: 18px; }
+.dc-tile:fullscreen {
+  max-width: none; width: 100%; height: 100%; border-radius: 0; background: #000;
+  display: flex; align-items: center; justify-content: center;
+}
+.dc-tile:fullscreen .dc-video { width: 100%; height: 100%; object-fit: contain; }
+.dc-tile:fullscreen .dc-fs { opacity: 1; }
+.dc-tile:fullscreen .dc-nametag { font-size: 15px; }
+.dc-tile.video .dc-stat { bottom: 42px; }

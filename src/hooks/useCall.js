@@ -66,8 +66,8 @@ export function useCall(myId) {
   const [micOn, setMicOn] = useState(true);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
-  const [resolution, setResState] = useState('r1080');
-  const [fps, setFpsState] = useState(60);
+  const [resolution, setResState] = useState(localStorage.getItem('chat.camRes') || 'r720');
+  const [fps, setFpsState] = useState(Number(localStorage.getItem('chat.camFps')) || 30);
   const [stats, setStats] = useState(null);
   const [remoteVideoOn, setRemoteVideoOn] = useState(false);
 
@@ -82,9 +82,18 @@ export function useCall(myId) {
   const makingOfferRef = useRef(false);
   const acceptedRef = useRef(false);
   const peerRef = useRef(null);
-  const resRef = useRef('r1080');
-  const fpsRef = useRef(60);
-  const mediaRef = useRef(mediaPreset('r1080', 60));
+  // Пресеты качества запоминаются отдельно для камеры и демонстрации
+  const camMediaRef = useRef({
+    ...mediaPreset(localStorage.getItem('chat.camRes') || 'r720', Number(localStorage.getItem('chat.camFps')) || 30),
+    key: localStorage.getItem('chat.camRes') || 'r720',
+  });
+  const scrMediaRef = useRef({
+    ...mediaPreset(localStorage.getItem('chat.scrRes') || 'r1080', Number(localStorage.getItem('chat.scrFps')) || 60),
+    key: localStorage.getItem('chat.scrRes') || 'r1080',
+  });
+  // Все треки собеседника живут в одном объединённом потоке — иначе включение
+  // камеры/демки затирает поток с голосом и собеседник «немеет»
+  const remoteMergedRef = useRef(null);
   const audioCtxRef = useRef(null);
   const gainRef = useRef(null);
   const outTrackRef = useRef(null);
@@ -153,6 +162,7 @@ export function useCall(myId) {
     acceptedRef.current = false;
     makingOfferRef.current = false;
     peerRef.current = null;
+    remoteMergedRef.current = null;
     setRemoteStream(null);
     setRemoteVideoOn(false);
     setLocalVideo(null);
@@ -165,7 +175,7 @@ export function useCall(myId) {
 
   const applyBitrate = useCallback(async (sender, isScreen) => {
     if (!sender) return;
-    const preset = mediaRef.current;
+    const preset = (isScreen ? scrMediaRef : camMediaRef).current;
     try {
       const params = sender.getParameters();
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
@@ -189,16 +199,26 @@ export function useCall(myId) {
       };
 
       pc.ontrack = (e) => {
-        const stream = e.streams[0];
-        setRemoteStream(stream);
+        // Голос и видео приходят разными потоками — складываем их в один общий,
+        // чтобы включение видео не затирало поток с голосом
+        let merged = remoteMergedRef.current;
+        if (!merged) {
+          merged = new MediaStream();
+          remoteMergedRef.current = merged;
+        }
+        if (!merged.getTracks().includes(e.track)) merged.addTrack(e.track);
+        setRemoteStream(merged);
         const sync = () =>
-          setRemoteVideoOn(stream.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted));
+          setRemoteVideoOn(merged.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted));
         sync();
         e.track.onunmute = sync;
         e.track.onmute = sync;
-        e.track.onended = sync;
-        stream.onaddtrack = sync;
-        stream.onremovetrack = sync;
+        e.track.onended = () => {
+          try {
+            merged.removeTrack(e.track);
+          } catch (_) {}
+          sync();
+        };
       };
 
       pc.onnegotiationneeded = async () => {
@@ -470,7 +490,7 @@ export function useCall(myId) {
 
   const toggleCamera = useCallback(async () => {
     if (cameraOn) return stopVideo();
-    const p = mediaRef.current;
+    const p = camMediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -482,6 +502,9 @@ export function useCall(myId) {
       await setVideoTrack(stream.getVideoTracks()[0], stream, false);
       setCameraOn(true);
       setScreenOn(false);
+      // Показываем в панели пресет именно камеры
+      setResState(p.key);
+      setFpsState(p.fps);
     } catch (e) {
       alert('Камера недоступна: ' + e.message);
     }
@@ -489,7 +512,7 @@ export function useCall(myId) {
 
   const toggleScreen = useCallback(async () => {
     if (screenOn) return stopVideo();
-    const p = mediaRef.current;
+    const p = scrMediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
@@ -502,6 +525,8 @@ export function useCall(myId) {
       await setVideoTrack(stream.getVideoTracks()[0], stream, true);
       setScreenOn(true);
       setCameraOn(false);
+      setResState(p.key);
+      setFpsState(p.fps);
     } catch (e) {
       if (e.name !== 'NotAllowedError') alert('Демонстрация не началась: ' + e.message);
     }
@@ -509,7 +534,7 @@ export function useCall(myId) {
 
   const applyMediaPreset = useCallback(
     async (isScreen) => {
-      const p = mediaRef.current;
+      const p = (isScreen ? scrMediaRef : camMediaRef).current;
       const track = videoStreamRef.current?.getVideoTracks()[0];
       if (!track) return;
       try {
@@ -528,9 +553,12 @@ export function useCall(myId) {
 
   const setResolution = useCallback(
     async (key) => {
-      resRef.current = key;
+      // Пресет применяется к активному источнику: демка приоритетнее камеры
+      const target = screenOn ? 'screen' : 'camera';
+      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
+      ref.current = { ...mediaPreset(key, ref.current.fps), key };
+      localStorage.setItem(target === 'screen' ? 'chat.scrRes' : 'chat.camRes', key);
       setResState(key);
-      mediaRef.current = mediaPreset(key, fpsRef.current);
       await applyMediaPreset(screenOn);
     },
     [applyMediaPreset, screenOn]
@@ -539,9 +567,11 @@ export function useCall(myId) {
   const setFps = useCallback(
     async (value) => {
       const n = Number(value) || 60;
-      fpsRef.current = n;
+      const target = screenOn ? 'screen' : 'camera';
+      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
+      ref.current = { ...mediaPreset(ref.current.key, n), key: ref.current.key };
+      localStorage.setItem(target === 'screen' ? 'chat.scrFps' : 'chat.camFps', String(n));
       setFpsState(n);
-      mediaRef.current = mediaPreset(resRef.current, n);
       await applyMediaPreset(screenOn);
     },
     [applyMediaPreset, screenOn]
