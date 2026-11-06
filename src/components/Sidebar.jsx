@@ -121,6 +121,7 @@ export default function Sidebar({
         onProfileChange={onProfileChange}
         onSignOut={onSignOut}
       />
+      <div className="sb-version">Scalable Chat v1.1.1</div>
     </aside>
   );
 }

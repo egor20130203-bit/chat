@@ -756,3 +756,5 @@ button { touch-action: manipulation; }
 .modal-submit:hover { background: var(--accent-hi); }
 .modal-submit:active { transform: scale(.98); }
 .modal-submit:disabled { opacity: .5; cursor: default; }
+
+.sb-version { padding: 6px 12px; font-size: 11px; color: var(--muted); text-align: center; }
