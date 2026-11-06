@@ -4,6 +4,9 @@ import { STATUSES } from '../hooks/usePresence';
 import Icon from './Icons';
 import Avatar from './Avatar';
 import GroupCallPanel from './GroupCallPanel';
+import Lightbox from './Lightbox';
+import FileAttachment from './FileAttachment';
+import { uploadAttachment } from '../lib/bigfiles';
 
 const timeOf = (ts) =>
   new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -83,7 +86,8 @@ export default function RoomWindow({ profile, room, peers, groupCallApi, deafene
   const [members, setMembers] = useState([]); // профили участников
   const [text, setText] = useState('');
   const [showMembers, setShowMembers] = useState(true);
-  const [uploading, setUploading] = useState(null);
+  const [uploading, setUploading] = useState(null); // { name, pct } | null
+  const [viewer, setViewer] = useState(null); // { url, name } | null
   const [typingNames, setTypingNames] = useState({}); // userId -> name
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -300,20 +304,11 @@ export default function RoomWindow({ profile, room, peers, groupCallApi, deafene
 
   const sendFile = async (file) => {
     if (!file) return;
-    if (file.size > MAX_FILE_MB * 1024 * 1024) {
-      alert(`Файл слишком большой: ${prettySize(file.size)}. Максимум ${MAX_FILE_MB} МБ.`);
-      return;
-    }
-    setUploading(file.name);
+    setUploading({ name: file.name, pct: 0 });
     try {
-      const safe = file.name.replace(/[^\w.\-]+/g, '_');
-      const path = `${profile.id}/${Date.now()}_${safe}`;
-      const { error: upErr } = await supabase.storage
-        .from('attachments')
-        .upload(path, file, { cacheControl: '3600', upsert: false });
-      if (upErr) throw upErr;
-
-      const { data: pub } = supabase.storage.from('attachments').getPublicUrl(path);
+      const att = await uploadAttachment(profile.id, file, (pct) =>
+        setUploading({ name: file.name, pct })
+      );
 
       const { data, error } = await supabase
         .from('room_messages')
@@ -321,10 +316,10 @@ export default function RoomWindow({ profile, room, peers, groupCallApi, deafene
           room_id: room.id,
           sender_id: profile.id,
           content: '',
-          attachment_url: pub.publicUrl,
-          attachment_name: file.name,
-          attachment_size: file.size,
-          attachment_type: file.type,
+          attachment_url: att.url,
+          attachment_name: att.name,
+          attachment_size: att.size,
+          attachment_type: att.type,
         })
         .select()
         .single();
@@ -503,19 +498,19 @@ export default function RoomWindow({ profile, room, peers, groupCallApi, deafene
                           )}
                           {m.attachment_url &&
                             (m.attachment_type?.startsWith('image/') ? (
-                              <a href={m.attachment_url} target="_blank" rel="noreferrer">
-                                <img className="msg-image" src={m.attachment_url} alt={m.attachment_name} />
-                              </a>
+                              <img
+                                className="msg-image"
+                                src={m.attachment_url}
+                                alt={m.attachment_name}
+                                onClick={() => setViewer({ url: m.attachment_url, name: m.attachment_name })}
+                              />
                             ) : (
-                              <a className="msg-file" href={m.attachment_url} target="_blank" rel="noreferrer">
-                                <span className="msg-file-icon">
-                                  <Icon name="download" size={18} />
-                                </span>
-                                <span>
-                                  <span className="msg-file-name">{m.attachment_name}</span>
-                                  <span className="msg-file-size">{prettySize(m.attachment_size)}</span>
-                                </span>
-                              </a>
+                              <FileAttachment
+                                url={m.attachment_url}
+                                name={m.attachment_name}
+                                size={m.attachment_size}
+                                type={m.attachment_type}
+                              />
                             ))}
                         </div>
                       );
@@ -537,7 +532,11 @@ export default function RoomWindow({ profile, room, peers, groupCallApi, deafene
           )}
         </div>
 
-        {uploading && <div className="upload-bar">Отправляем «{uploading}»…</div>}
+        {uploading && (
+          <div className="upload-bar">
+            Отправляем «{uploading.name}»…{uploading.pct > 0 ? ` ${uploading.pct}%` : ''}
+          </div>
+        )}
 
         <div className="composer">
           {emojiOpen && (
@@ -587,8 +586,7 @@ export default function RoomWindow({ profile, room, peers, groupCallApi, deafene
       {showMembers && (
         <aside className="profile-pane">
           <div className="pp-body">
-            <div className="pp-label">Участники — {members.length}</div>
-            <div className="member-list">
+            <div className="pp-label">Участники — {members.length}</div>            <div className="member-list">
               {[profile, ...members.filter((m) => m.id !== profile.id)].map((m) => {
                 const p = peers?.[m.id];
                 const color = p ? STATUSES[p.status]?.color ?? '#7a7d8a' : '#7a7d8a';
@@ -606,6 +604,8 @@ export default function RoomWindow({ profile, room, peers, groupCallApi, deafene
           </div>
         </aside>
       )}
+
+      {viewer && <Lightbox src={viewer.url} name={viewer.name} onClose={() => setViewer(null)} />}
     </div>
   );
 }
