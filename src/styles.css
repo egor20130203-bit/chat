@@ -542,3 +542,12 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 }
 .msg-file-name { display: block; font-size: 14px; color: #a9b0ff; }
 .msg-file-size { display: block; font-size: 11px; color: var(--muted); }
+
+/* ---------- Отзывчивость ---------- */
+button { touch-action: manipulation; }
+.btn, .fr-icon, .hd-btn, .dc-btn, .fr-tab, .contact, .sb-nav, .up-ctl, .up-chev, .cp-send, .cp-plus, .fr-add-btn, .pp-call, .up-item, .tab {
+  transition: transform .06s ease, background .15s, color .15s, filter .15s;
+}
+.btn:active, .fr-icon:active, .hd-btn:active, .dc-btn:active, .fr-tab:active, .sb-nav:active, .up-ctl:active, .up-chev:active, .cp-send:active, .cp-plus:active, .fr-add-btn:active, .pp-call:active, .up-item:active, .tab:active {
+  transform: scale(.95);
+}

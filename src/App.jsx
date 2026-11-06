@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
+import { desktop } from './lib/desktop';
 import { useCall } from './hooks/useCall';
 import { usePresence } from './hooks/usePresence';
 import Auth from './components/Auth';
@@ -106,7 +107,7 @@ export default function App() {
   // Говорим десктопному приложению, идёт ли звонок:
   // без звонка свёрнутое окно засыпает и не ест FPS в играх
   useEffect(() => {
-    window.chatDesktop?.setInCall?.(!!callApi.call);
+    desktop?.setInCall?.(!!callApi.call);
   }, [callApi.call]);
 
   const openChat = (c) => {
