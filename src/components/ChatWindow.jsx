@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { STATUSES } from '../hooks/usePresence';
 import Icon from './Icons';
+import Avatar from './Avatar';
 import CallPanel from './CallPanel';
-
-const initials = (n) => (n || '?').slice(0, 2).toUpperCase();
 
 const timeOf = (ts) =>
   new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -23,13 +22,81 @@ const prettySize = (b) => {
   return (b / 1073741824).toFixed(2) + ' ГБ';
 };
 
+// Частые эмодзи — лёгкий пикер без сторонних библиотек
+const EMOJI_STR =
+  '😀😃😄😁😆😅😂🤣😊😇🙂😉😍😘😜🤪😎🤩🥳😏😒🙄😬😴🤤😷🤒🤕🤢🤮🥵🥶😱😨😰😥😓🤗🤔🤭🤫🤥😶😐😑😯😦😧😮😲🥱😵🤯😤😡😠🤬😈👿💀💩🤡👍👎👏🙌🙏🤝💪✌️👌🤟❤️🧡💛💚💙💜🖤🤍💔❣️💕💖💯🔥✨🎉🎊🎈🎁🏆⚽🎮🎲🎯🚀🌙⭐☀️🌈☕🍕🍔🍿🎂🍩🍪🥛🍺';
+const EMOJI = [...new Intl.Segmenter('ru', { granularity: 'grapheme' }).segment(EMOJI_STR)].map(
+  (s) => s.segment
+);
+
+// Мини-форматирование: **жирный**, *курсив*, `код`, ссылки
+function renderRich(text) {
+  const nodes = [];
+  let rest = String(text ?? '');
+  let key = 0;
+  const push = (t) => t && nodes.push(t);
+  while (rest) {
+    let m = rest.match(/^(https?:\/\/[^\s]+)/);
+    if (m) {
+      nodes.push(
+        <a key={key++} href={m[1]} target="_blank" rel="noreferrer">
+          {m[1]}
+        </a>
+      );
+      rest = rest.slice(m[1].length);
+      continue;
+    }
+    m = rest.match(/^\*\*([^*]+)\*\*/);
+    if (m) {
+      nodes.push(<strong key={key++}>{m[1]}</strong>);
+      rest = rest.slice(m[0].length);
+      continue;
+    }
+    m = rest.match(/^\*([^*]+)\*/);
+    if (m) {
+      nodes.push(<em key={key++}>{m[1]}</em>);
+      rest = rest.slice(m[0].length);
+      continue;
+    }
+    m = rest.match(/^`([^`]+)`/);
+    if (m) {
+      nodes.push(<code key={key++}>{m[1]}</code>);
+      rest = rest.slice(m[0].length);
+      continue;
+    }
+    const next = rest.search(/https?:\/\/|\*\*[^*]|\*[^*]|`[^`]/);
+    if (next === -1) {
+      push(rest);
+      break;
+    }
+    if (next === 0) {
+      push(rest[0]);
+      rest = rest.slice(1);
+      continue;
+    }
+    push(rest.slice(0, next));
+    rest = rest.slice(next);
+  }
+  return nodes;
+}
+
 export default function ChatWindow({ profile, contact, peers, onCall, callActive, callApi, callPeerName, deafened, volume }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [showProfile, setShowProfile] = useState(true);
   const [uploading, setUploading] = useState(null);
+  const [typingName, setTypingName] = useState(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [search, setSearch] = useState('');
+  const [searchOn, setSearchOn] = useState(false);
   const bottomRef = useRef(null);
   const fileRef = useRef(null);
+  const inputRef = useRef(null);
+  const chanRef = useRef(null);
+  const typingSentRef = useRef(0);
+  const typingTimerRef = useRef(null);
 
   useEffect(() => {
     if (!contact) return;
@@ -55,11 +122,32 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
         const mine = row.sender_id === profile.id && row.recipient_id === contact.id;
         const theirs = row.sender_id === contact.id && row.recipient_id === profile.id;
         if (mine || theirs) setMessages((m) => (m.some((x) => x.id === row.id) ? m : [...m, row]));
+        if (theirs) {
+          localStorage.setItem(`chat.read.${contact.id}`, new Date().toISOString());
+          setTypingName(null);
+        }
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, ({ new: row }) => {
+        setMessages((m) => m.map((x) => (x.id === row.id ? { ...x, ...row } : x)));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old: row }) => {
+        if (row?.id) setMessages((m) => m.filter((x) => x.id !== row.id));
+      })
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        if (payload?.from !== contact.id) return;
+        setTypingName(contact.display_name);
+        clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = setTimeout(() => setTypingName(null), 4000);
       })
       .subscribe();
+    chanRef.current = ch;
+
+    // Отмечаем чат прочитанным
+    localStorage.setItem(`chat.read.${contact.id}`, new Date().toISOString());
 
     return () => {
       alive = false;
+      chanRef.current = null;
       supabase.removeChannel(ch);
     };
   }, [contact, profile.id]);
@@ -68,9 +156,9 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = async () => {
-    const body = text.trim();
-    if (!body) return;
+  const sendMessage = async (bodyOverride) => {
+    const body = (bodyOverride ?? text).trim();
+    if (!body || !contact) return;
     setText('');
     const { data, error } = await supabase
       .from('messages')
@@ -82,6 +170,60 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
       return;
     }
     setMessages((m) => (m.some((x) => x.id === data.id) ? m : [...m, data]));
+  };
+
+  // Шлём «печатает…», не чаще раза в 2,5 секунды
+  const onType = (value) => {
+    setText(value);
+    const now = Date.now();
+    if (now - typingSentRef.current < 2500) return;
+    typingSentRef.current = now;
+    chanRef.current?.send({ type: 'broadcast', event: 'typing', payload: { from: profile.id } });
+  };
+
+  const insertEmoji = (e) => {
+    const el = inputRef.current;
+    if (!el) return setText((t) => t + e);
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + e + text.slice(end);
+    setText(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(start + e.length, start + e.length);
+    });
+  };
+
+  const startEdit = (m) => {
+    setEditingId(m.id);
+    setEditText(m.content);
+  };
+
+  const saveEdit = async () => {
+    const body = editText.trim();
+    if (!body || !editingId) return setEditingId(null);
+    const { error } = await supabase
+      .from('messages')
+      .update({ content: body, edited_at: new Date().toISOString() })
+      .eq('id', editingId);
+    if (error) {
+      alert('Не удалось изменить: ' + error.message);
+      return;
+    }
+    setMessages((m) =>
+      m.map((x) => (x.id === editingId ? { ...x, content: body, edited_at: new Date().toISOString() } : x))
+    );
+    setEditingId(null);
+  };
+
+  const removeMessage = async (id) => {
+    if (!confirm('Удалить сообщение?')) return;
+    const { error } = await supabase.from('messages').delete().eq('id', id);
+    if (error) {
+      alert('Не удалось удалить: ' + error.message);
+      return;
+    }
+    setMessages((m) => m.filter((x) => x.id !== id));
   };
 
   const sendFile = async (file) => {
@@ -138,6 +280,9 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
     return out;
   }, [messages]);
 
+  const query = search.trim().toLowerCase();
+  const hitCount = query ? messages.filter((m) => m.content?.toLowerCase().includes(query)).length : 0;
+
   if (!contact) {
     return (
       <main className="chat empty-state">
@@ -157,14 +302,33 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
     <div className="chat-wrap">
       <main className="chat">
         <header className="chat-head">
-          <span className="avatar">
-            {initials(contact.display_name)}
-            <span className="up-dot small" style={{ background: color }} />
-          </span>
+          <Avatar person={contact} color={color} dotClass="up-dot small" />
           <span className="chat-title">{contact.display_name}</span>
           {p?.activity && <span className="chat-activity">{p.activity}</span>}
 
           <span className="chat-head-actions">
+            {searchOn && (
+              <span className="chat-search">
+                <Icon name="search" size={15} />
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Поиск по чату"
+                />
+                {query && <span className="search-count">{hitCount}</span>}
+              </span>
+            )}
+            <button
+              className={searchOn ? 'hd-btn active' : 'hd-btn'}
+              onClick={() => {
+                setSearchOn((v) => !v);
+                setSearch('');
+              }}
+              title="Поиск по сообщениям"
+            >
+              <Icon name="search" />
+            </button>
             <button className="hd-btn" onClick={() => onCall(contact)} disabled={callActive} title="Позвонить">
               <Icon name="phone" />
             </button>
@@ -193,7 +357,9 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
 
         <div className="messages">
           <div className="intro">
-            <div className="intro-avatar">{initials(contact.display_name)}</div>
+            <span className="intro-avatar">
+              {contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : (contact.display_name || '?').slice(0, 2).toUpperCase()}
+            </span>
             <div className="intro-name">{contact.display_name}</div>
             <div className="intro-nick">{nick}</div>
             <div className="intro-text">
@@ -204,7 +370,7 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
           {groups.map((g, gi) => {
             const first = g.items[0];
             const mine = g.sender === profile.id;
-            const author = mine ? profile.display_name : contact.display_name;
+            const author = mine ? profile : contact;
             const prev = groups[gi - 1];
             const newDay = !prev || dayOf(prev.items[0].created_at) !== dayOf(first.created_at);
             return (
@@ -215,31 +381,62 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
                   </div>
                 )}
                 <div className="msg-group">
-                  <span className="avatar">{initials(author)}</span>
+                  <Avatar person={author} />
                   <div className="msg-body">
                     <div className="msg-meta">
-                      <span className={mine ? 'msg-author me' : 'msg-author'}>{author}</span>
+                      <span className={mine ? 'msg-author me' : 'msg-author'}>{author.display_name}</span>
                       <span className="msg-time">{timeOf(first.created_at)}</span>
                     </div>
-                    {g.items.map((m) => (
-                      <div key={m.id} className="msg-line">
-                        {m.content}
-                        {m.attachment_url &&
-                          (m.attachment_type?.startsWith('image/') ? (
-                            <a href={m.attachment_url} target="_blank" rel="noreferrer">
-                              <img className="msg-image" src={m.attachment_url} alt={m.attachment_name} />
-                            </a>
+                    {g.items.map((m) => {
+                      const isHit = query && m.content?.toLowerCase().includes(query);
+                      return (
+                        <div key={m.id} className={isHit ? 'msg-line search-hit' : 'msg-line'}>
+                          {m.sender_id === profile.id && (
+                            <span className="msg-actions">
+                              <button className="msg-act" onClick={() => startEdit(m)} title="Изменить">
+                                <Icon name="edit" size={16} />
+                              </button>
+                              <button className="msg-act danger" onClick={() => removeMessage(m.id)} title="Удалить">
+                                <Icon name="trash" size={16} />
+                              </button>
+                            </span>
+                          )}
+                          {editingId === m.id ? (
+                            <input
+                              className="msg-edit-input"
+                              autoFocus
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveEdit();
+                                if (e.key === 'Escape') setEditingId(null);
+                              }}
+                            />
                           ) : (
-                            <a className="msg-file" href={m.attachment_url} target="_blank" rel="noreferrer">
-                              <span className="msg-file-icon">⬇</span>
-                              <span>
-                                <span className="msg-file-name">{m.attachment_name}</span>
-                                <span className="msg-file-size">{prettySize(m.attachment_size)}</span>
-                              </span>
-                            </a>
-                          ))}
-                      </div>
-                    ))}
+                            <>
+                              {renderRich(m.content)}
+                              {m.edited_at && <span className="msg-edited">(изм.)</span>}
+                            </>
+                          )}
+                          {m.attachment_url &&
+                            (m.attachment_type?.startsWith('image/') ? (
+                              <a href={m.attachment_url} target="_blank" rel="noreferrer">
+                                <img className="msg-image" src={m.attachment_url} alt={m.attachment_name} />
+                              </a>
+                            ) : (
+                              <a className="msg-file" href={m.attachment_url} target="_blank" rel="noreferrer">
+                                <span className="msg-file-icon">
+                                  <Icon name="download" size={18} />
+                                </span>
+                                <span>
+                                  <span className="msg-file-name">{m.attachment_name}</span>
+                                  <span className="msg-file-size">{prettySize(m.attachment_size)}</span>
+                                </span>
+                              </a>
+                            ))}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -248,9 +445,27 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
           <div ref={bottomRef} />
         </div>
 
+        <div className="typing">
+          {typingName && (
+            <>
+              <span className="typing-dots"><i /><i /><i /></span>
+              <b>{typingName}</b>&nbsp;печатает…
+            </>
+          )}
+        </div>
+
         {uploading && <div className="upload-bar">Отправляем «{uploading}»…</div>}
 
         <div className="composer">
+          {emojiOpen && (
+            <div className="emoji-pop">
+              {EMOJI.map((e) => (
+                <button key={e} onClick={() => insertEmoji(e)}>
+                  {e}
+                </button>
+              ))}
+            </div>
+          )}
           <input
             ref={fileRef}
             type="file"
@@ -266,12 +481,21 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
             <Icon name="plus" />
           </button>
           <input
+            ref={inputRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => onType(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+            onFocus={() => setEmojiOpen(false)}
             placeholder={`Написать @${contact.display_name}`}
           />
-          <button className="cp-send" onClick={sendMessage} title="Отправить">
+          <button
+            className={emojiOpen ? 'cp-emoji active' : 'cp-emoji'}
+            onClick={() => setEmojiOpen((v) => !v)}
+            title="Эмодзи"
+          >
+            <Icon name="emoji" />
+          </button>
+          <button className="cp-send" onClick={() => sendMessage()} title="Отправить">
             <Icon name="send" />
           </button>
         </div>
@@ -281,10 +505,10 @@ export default function ChatWindow({ profile, contact, peers, onCall, callActive
         <aside className="profile-pane">
           <div className="pp-banner" />
           <div className="pp-top">
-            <div className="pp-avatar">
-              {initials(contact.display_name)}
+            <span className="pp-avatar">
+              {contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : (contact.display_name || '?').slice(0, 2).toUpperCase()}
               <span className="up-dot" style={{ background: color }} />
-            </div>
+            </span>
           </div>
           <div className="pp-body">
             <div className="pp-name">{contact.display_name}</div>

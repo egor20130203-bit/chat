@@ -14,6 +14,7 @@ export default function App() {
   const [contacts, setContacts] = useState([]);
   const [requests, setRequests] = useState([]);
   const [outgoing, setOutgoing] = useState([]);
+  const [unread, setUnread] = useState({});
   const [active, setActive] = useState(null);
   const [view, setView] = useState('friends');
   const [deafened, setDeafened] = useState(false);
@@ -98,6 +99,30 @@ export default function App() {
     return () => supabase.removeChannel(ch);
   }, [session, loadContacts]);
 
+  // Входящие сообщения: считаем непрочитанные и показываем уведомления
+  useEffect(() => {
+    if (!session?.user) return;
+    const me = session.user.id;
+    const ch = supabase
+      .channel('inbox_watch')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: row }) => {
+        if (row.recipient_id !== me || row.sender_id === me) return;
+        const chatOpen = view === 'chat' && active?.id === row.sender_id;
+        if (chatOpen) return;
+        setUnread((u) => ({ ...u, [row.sender_id]: (u[row.sender_id] ?? 0) + 1 }));
+        const from = contacts.find((c) => c.id === row.sender_id);
+        const title = from?.display_name ?? 'Новое сообщение';
+        const body = row.content || `📎 ${row.attachment_name ?? 'Файл'}`;
+        if (desktop?.notify) desktop.notify(title, body);
+        else if ('Notification' in window) {
+          if (Notification.permission === 'granted') new Notification(title, { body });
+          else if (Notification.permission === 'default') Notification.requestPermission();
+        }
+      })
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [session, contacts, active, view]);
+
   const callApi = useCall(session?.user?.id ?? null);
   const { peers, myShownStatus, changeStatus } = usePresence(
     session?.user?.id ?? null,
@@ -113,6 +138,8 @@ export default function App() {
   const openChat = (c) => {
     setActive(c);
     setView('chat');
+    // Открыли переписку — сбрасываем счётчик непрочитанных
+    setUnread((u) => (u[c.id] ? { ...u, [c.id]: 0 } : u));
   };
 
   const peerName = contacts.find((c) => c.id === callApi.call?.peerId)?.display_name ?? 'Собеседник';
@@ -141,6 +168,7 @@ export default function App() {
         active={active}
         view={view}
         peers={peers}
+        unread={unread}
         myStatus={myShownStatus}
         callApi={callApi}
         deafened={deafened}

@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { STATUSES } from '../hooks/usePresence';
+import Icon from './Icons';
+import Avatar from './Avatar';
 
 const initials = (n) => (n || '?').slice(0, 2).toUpperCase();
 
@@ -69,10 +71,7 @@ export default function FriendsView({ profile, contacts, requests, outgoing, pee
     const color = p ? STATUSES[p.status]?.color ?? '#7a7d8a' : '#7a7d8a';
     return (
       <div className="fr-row">
-        <span className="avatar big">
-          {initials(person.display_name)}
-          <span className="up-dot small" style={{ background: color }} />
-        </span>
+        <Avatar person={person} className="avatar big" color={color} dotClass="up-dot small" />
         <span className="fr-text">
           <span className="fr-name">{person.display_name}</span>
           <span className="fr-sub">{sub}</span>
@@ -151,10 +150,10 @@ export default function FriendsView({ profile, contacts, requests, outgoing, pee
             {online.map((c) => (
               <Row key={c.id} person={c} sub={statusText(c.id)}>
                 <button className="fr-icon" onClick={() => onOpenChat(c)} title="Написать">
-                  ✉
+                  <Icon name="message" size={17} />
                 </button>
                 <button className="fr-icon" onClick={() => onCall(c)} title="Позвонить">
-                  ✆
+                  <Icon name="phone" size={17} />
                 </button>
               </Row>
             ))}
@@ -168,13 +167,13 @@ export default function FriendsView({ profile, contacts, requests, outgoing, pee
             {contacts.map((c) => (
               <Row key={c.id} person={c} sub={statusText(c.id)}>
                 <button className="fr-icon" onClick={() => onOpenChat(c)} title="Написать">
-                  ✉
+                  <Icon name="message" size={17} />
                 </button>
                 <button className="fr-icon" onClick={() => onCall(c)} title="Позвонить">
-                  ✆
+                  <Icon name="phone" size={17} />
                 </button>
                 <button className="fr-icon danger" onClick={() => remove(c.rowId)} title="Удалить">
-                  ✕
+                  <Icon name="close" size={17} />
                 </button>
               </Row>
             ))}
@@ -188,10 +187,10 @@ export default function FriendsView({ profile, contacts, requests, outgoing, pee
             {requests.map((r) => (
               <Row key={r.rowId} person={r} sub="Хочет добавить вас в друзья">
                 <button className="fr-icon ok" onClick={() => accept(r)} title="Принять">
-                  ✓
+                  <Icon name="check" size={17} />
                 </button>
                 <button className="fr-icon danger" onClick={() => remove(r.rowId)} title="Отклонить">
-                  ✕
+                  <Icon name="close" size={17} />
                 </button>
               </Row>
             ))}
@@ -201,7 +200,7 @@ export default function FriendsView({ profile, contacts, requests, outgoing, pee
             {outgoing.map((r) => (
               <Row key={r.rowId} person={r} sub="Ожидает подтверждения">
                 <button className="fr-icon danger" onClick={() => remove(r.rowId)} title="Отменить">
-                  ✕
+                  <Icon name="close" size={17} />
                 </button>
               </Row>
             ))}

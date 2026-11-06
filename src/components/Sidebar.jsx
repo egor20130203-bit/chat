@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { STATUSES } from '../hooks/usePresence';
+import Icon from './Icons';
+import Avatar from './Avatar';
 import UserPanel from './UserPanel';
-
-const initials = (n) => (n || '?').slice(0, 2).toUpperCase();
 
 export default function Sidebar({
   profile,
@@ -11,6 +11,7 @@ export default function Sidebar({
   active,
   view,
   peers,
+  unread = {},
   myStatus,
   callApi,
   deafened,
@@ -42,7 +43,9 @@ export default function Sidebar({
         className={view === 'friends' ? 'sb-nav active' : 'sb-nav'}
         onClick={onOpenFriends}
       >
-        <span className="sb-nav-icon">👥</span>
+        <span className="sb-nav-icon">
+          <Icon name="users" size={17} />
+        </span>
         Друзья
         {requests.length > 0 && <span className="sb-badge">{requests.length}</span>}
       </button>
@@ -55,20 +58,18 @@ export default function Sidebar({
           const p = peers?.[c.id];
           const color = p ? STATUSES[p.status]?.color ?? '#7a7d8a' : '#7a7d8a';
           const sub = p ? (p.activity ? `Играет в ${p.activity}` : STATUSES[p.status]?.label) : 'Не в сети';
+          const n = unread[c.id] ?? 0;
+          const cls =
+            (active?.id === c.id && view === 'chat' ? 'contact active' : 'contact') +
+            (n > 0 ? ' has-unread' : '');
           return (
-            <button
-              key={c.id}
-              className={active?.id === c.id && view === 'chat' ? 'contact active' : 'contact'}
-              onClick={() => onSelect(c)}
-            >
-              <span className="avatar">
-                {initials(c.display_name)}
-                <span className="up-dot small" style={{ background: color }} />
-              </span>
+            <button key={c.id} className={cls} onClick={() => onSelect(c)}>
+              <Avatar person={c} color={color} dotClass="up-dot small" />
               <span className="contact-text">
                 <span className="contact-name">{c.display_name}</span>
                 <span className="contact-sub">{sub}</span>
               </span>
+              {n > 0 && <span className="unread-badge">{n > 99 ? '99+' : n}</span>}
             </button>
           );
         })}

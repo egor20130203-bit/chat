@@ -25,6 +25,27 @@ export default function UserPanel({
   const [activity, setActivity] = useState(profile.activity ?? '');
   const [selfMuted, setSelfMuted] = useState(() => localStorage.getItem('chat.startMuted') === '1');
   const boxRef = useRef(null);
+  const avaRef = useRef(null);
+
+  // Загрузка аватарки в Supabase Storage
+  const uploadAvatar = async (file) => {
+    if (!file) return;
+    try {
+      const ext = file.name.split('.').pop() || 'png';
+      const path = `${profile.id}/avatar.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('avatars')
+        .upload(path, file, { upsert: true, cacheControl: '0' });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from('avatars').getPublicUrl(path);
+      const url = pub.publicUrl + '?t=' + Date.now();
+      const { error } = await supabase.from('profiles').update({ avatar_url: url }).eq('id', profile.id);
+      if (error) throw error;
+      onProfileChange({ ...profile, avatar_url: url });
+    } catch (e) {
+      alert('Аватарка не загрузилась: ' + e.message);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -90,7 +111,7 @@ export default function UserPanel({
           <div className="up-banner" />
           <div className="up-top">
             <div className="up-avatar">
-              {initials(profile.display_name)}
+              {profile.avatar_url ? <img src={profile.avatar_url} alt="" /> : initials(profile.display_name)}
               <span className="up-dot" style={{ background: dot }} />
             </div>
           </div>
@@ -123,6 +144,17 @@ export default function UserPanel({
                     Отмена
                   </button>
                 </div>
+                <input
+                  ref={avaRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={(e) => uploadAvatar(e.target.files?.[0])}
+                />
+                <button className="ava-upload" onClick={() => avaRef.current?.click()}>
+                  <Icon name="camera" size={16} />
+                  Сменить аватарку
+                </button>
               </>
             ) : (
               <>
@@ -169,7 +201,7 @@ export default function UserPanel({
       <div className="up-bar-row">
         <button className="up-bar" onClick={() => setOpen((v) => !v)}>
           <span className="avatar">
-            {initials(profile.display_name)}
+            {profile.avatar_url ? <img src={profile.avatar_url} alt="" /> : initials(profile.display_name)}
             <span className="up-dot small" style={{ background: dot }} />
           </span>
           <span className="up-bar-text">
