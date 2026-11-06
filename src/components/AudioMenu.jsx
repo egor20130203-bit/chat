@@ -12,6 +12,8 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
     Number(localStorage.getItem(isMic ? 'chat.micVolume' : 'chat.spkVolume') ?? 100)
   );
   const [level, setLevel] = useState(0);
+  const [meterErr, setMeterErr] = useState(null);
+  const [retry, setRetry] = useState(0);
   const boxRef = useRef(null);
 
   useEffect(() => {
@@ -44,6 +46,7 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
     let ctx, stream, raf;
     (async () => {
       try {
+        setMeterErr(null);
         const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
         if (device) audio.deviceId = { ideal: device };
         stream = await navigator.mediaDevices.getUserMedia({ audio });
@@ -53,6 +56,7 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
         }
         ctx = new (window.AudioContext || window.webkitAudioContext)();
         await ctx.resume?.().catch(() => {});
+        if (ctx.state !== 'running') throw new Error('звуковой движок спит — кликни по полоске');
         const src = ctx.createMediaStreamSource(stream);
         const an = ctx.createAnalyser();
         an.fftSize = 256;
@@ -70,7 +74,9 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
           raf = requestAnimationFrame(loop);
         };
         loop();
-      } catch (_) {}
+      } catch (e) {
+        setMeterErr(e.message ?? String(e));
+      }
     })();
     return () => {
       stop = true;
@@ -78,7 +84,7 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
       stream?.getTracks().forEach((t) => t.stop());
       ctx?.close().catch(() => {});
     };
-  }, [isMic, device, devices]);
+  }, [isMic, device, devices, retry]);
 
   const askAccess = async () => {
     try {
@@ -151,11 +157,15 @@ export default function AudioMenu({ kind, onClose, onMicVolume, onSpkVolume, onM
       {isMic && !noLabels && (
         <div className="am-section">
           <div className="am-title">Проверка микрофона — скажи что-нибудь</div>
-          <div className="am-meter">
+          <div className="am-meter" onClick={() => setRetry((r) => r + 1)} style={{ cursor: 'pointer' }}>
             <i style={{ width: level + '%' }} />
           </div>
           <div className="am-meter-hint">
-            {level > 3 ? '✅ Микрофон работает' : 'Полоска не двигается — выбери другое устройство выше'}
+            {meterErr
+              ? `⚠️ ${meterErr}`
+              : level > 3
+                ? '✅ Микрофон работает'
+                : 'Полоска не двигается — выбери другое устройство выше'}
           </div>
         </div>
       )}

@@ -239,11 +239,13 @@ export function useCall(myId) {
       setMicOn(false);
     }
 
-    // Пропускаем микрофон через регулятор громкости
+    // Пропускаем микрофон через регулятор громкости.
+    // Если звуковой движок спит (бывает в WebView2) — шлём микрофон напрямую, голос важнее регулировки.
     let outStream = stream;
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      ctx.resume?.().catch(() => {});
+      await ctx.resume?.().catch(() => {});
+      if (ctx.state !== 'running') throw new Error('аудиоконтекст спит');
       const src = ctx.createMediaStreamSource(stream);
       const gain = ctx.createGain();
       // В настройках громкость хранится в процентах (0–200), здесь нужен множитель
@@ -369,7 +371,8 @@ export function useCall(myId) {
       let outStream = stream;
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        ctx.resume?.().catch(() => {});
+        await ctx.resume?.().catch(() => {});
+        if (ctx.state !== 'running') throw new Error('аудиоконтекст спит');
         const src = ctx.createMediaStreamSource(stream);
         const gain = ctx.createGain();
         const saved = parseFloat(localStorage.getItem('chat.micVolume') ?? '100');

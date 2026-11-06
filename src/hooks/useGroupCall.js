@@ -297,7 +297,8 @@ export function useGroupCall(myId, myName) {
         let outStream = stream;
         try {
           const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          ctx.resume?.().catch(() => {});
+          await ctx.resume?.().catch(() => {});
+          if (ctx.state !== 'running') throw new Error('аудиоконтекст спит');
           const src = ctx.createMediaStreamSource(stream);
           const gain = ctx.createGain();
           const saved = parseFloat(localStorage.getItem('chat.micVolume') ?? '100');
@@ -382,7 +383,8 @@ export function useGroupCall(myId, myName) {
       let outStream = stream;
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        ctx.resume?.().catch(() => {});
+        await ctx.resume?.().catch(() => {});
+        if (ctx.state !== 'running') throw new Error('аудиоконтекст спит');
         const src = ctx.createMediaStreamSource(stream);
         const gain = ctx.createGain();
         const saved = parseFloat(localStorage.getItem('chat.micVolume') ?? '100');
