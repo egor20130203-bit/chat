@@ -862,3 +862,15 @@ button { touch-action: manipulation; }
 
 /* Плашка загрузки файла */
 .upload-bar { animation: msgIn .15s ease; }
+
+/* Индикатор уровня микрофона и проверка звука */
+.am-meter {
+  height: 8px; border-radius: 4px; background: var(--bg-deep); overflow: hidden;
+  border: 1px solid var(--line);
+}
+.am-meter i {
+  display: block; height: 100%; border-radius: 4px;
+  background: linear-gradient(90deg, var(--ok), #f0b132 70%, var(--danger));
+  transition: width .08s linear;
+}
+.am-meter-hint { margin-top: 6px; font-size: 11px; color: var(--muted); }

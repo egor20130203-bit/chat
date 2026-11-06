@@ -32,7 +32,10 @@ function RemoteAudio({ stream, deafened, volume }) {
     if (!stream) return;
     const id = localStorage.getItem('chat.spk');
     if (id && typeof el.setSinkId === 'function') {
-      el.setSinkId(id).catch(() => {});
+      el.setSinkId(id).catch(() => {
+        // Устройство пропало — забываем его, звук пойдёт через стандартное
+        localStorage.removeItem('chat.spk');
+      });
     }
     el.muted = !!deafened;
     el.volume = Math.min(1, Math.max(0, volume / 100));

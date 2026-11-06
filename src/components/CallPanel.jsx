@@ -67,7 +67,10 @@ export default function CallPanel({ callApi, peerName, myName, deafened, volume 
 
     const id = localStorage.getItem('chat.spk');
     if (id && typeof el.setSinkId === 'function') {
-      el.setSinkId(id).catch((e) => console.warn('Наушники не выбрались:', e));
+      el.setSinkId(id).catch(() => {
+        // Устройство отключили или оно пропало — забываем его, звук пойдёт через стандартное
+        localStorage.removeItem('chat.spk');
+      });
     }
 
     el.volume = Math.min(1, Math.max(0, volume / 100));
