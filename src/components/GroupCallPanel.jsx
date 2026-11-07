@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { RESOLUTIONS, FPS_OPTIONS } from '../hooks/useCall';
 
 const initials = (n) => (n || '?').slice(0, 2).toUpperCase();
@@ -46,47 +46,56 @@ function RemoteAudio({ stream, deafened, volume }) {
   return <audio ref={ref} autoPlay playsInline />;
 }
 
-// Видео одного участника
-function RemoteVideo({ stream, className }) {
+// Одна видеоплитка: поток + имя + кнопка фуллскрина
+function VideoTile({ stream, name, mirrored, stat, fsTile }) {
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current && ref.current.srcObject !== stream) ref.current.srcObject = stream ?? null;
   }, [stream]);
-  return <video ref={ref} autoPlay playsInline muted className={className} />;
+  return (
+    <div className="dc-tile video" onDoubleClick={fsTile}>
+      <video ref={ref} autoPlay playsInline muted className={mirrored ? 'dc-video mirrored' : 'dc-video'} />
+      <button className="dc-fs" onClick={fsTile} title="На весь экран">
+        <Icon name="expand" />
+      </button>
+      <div className="dc-nametag">{name}</div>
+      {stat && (
+        <div className="dc-stat">
+          {stat.w}×{stat.h} · {stat.fps} fps
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, deafened, volume = 100 }) {
   const {
     participants,
     remoteStreams,
-    localVideo,
+    localCam,
+    localScreen,
     micOn,
     cameraOn,
     screenOn,
-    resolution,
-    fps,
+    camRes,
+    camFps,
+    scrRes,
+    scrFps,
     stats,
     leave,
     toggleMic,
     toggleCamera,
     toggleScreen,
-    setResolution,
-    setFps,
+    setQuality,
   } = callApi;
-
-  const localRef = useRef(null);
-  useEffect(() => {
-    if (localRef.current) localRef.current.srcObject = localVideo ?? null;
-  }, [localVideo]);
 
   const myId = myProfile.id;
   const others = participants.filter((p) => p.id !== myId);
   const nameOf = (p) => memberMap[p.id]?.display_name ?? p.name ?? 'Участник';
   const avatarOf = (p) => memberMap[p.id]?.avatar_url ?? p.avatar_url ?? null;
 
-  const hasVideo = localVideo || others.some((p) => remoteStreams[p.id]?.videoOn);
-  // Пресеты показывают качество активного источника: демка приоритетнее камеры
-  const qualityTitle = screenOn ? 'Качество демонстрации' : 'Качество камеры';
+  const hasVideo =
+    localCam || localScreen || others.some((p) => remoteStreams[p.id]?.camOn || remoteStreams[p.id]?.screenOn);
 
   // Фуллскрин плитки: кнопка в углу или двойной клик по видео (как в Discord)
   const fsTile = (e) => {
@@ -100,64 +109,51 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
     <div className={hasVideo ? 'dc-panel tall' : 'dc-panel'}>
       {/* По аудио-элементу на каждого участника */}
       {others.map((p) =>
-        remoteStreams[p.id]?.stream ? (
-          <RemoteAudio key={p.id} stream={remoteStreams[p.id].stream} deafened={deafened} volume={volume} />
+        remoteStreams[p.id]?.audio ? (
+          <RemoteAudio key={p.id} stream={remoteStreams[p.id].audio} deafened={deafened} volume={volume} />
         ) : null
       )}
 
       <div className="dc-grid">
-        {/* Я */}
-        <div className={localVideo ? 'dc-tile video' : 'dc-tile'} onDoubleClick={localVideo ? fsTile : undefined}>
-          {localVideo ? (
-            <>
-              <video
-                ref={localRef}
-                autoPlay
-                playsInline
-                muted
-                className={screenOn ? 'dc-video' : 'dc-video mirrored'}
-              />
-              <button className="dc-fs" onClick={fsTile} title="На весь экран">
-                <Icon name="expand" />
-              </button>
-              {stats && (
-                <div className="dc-stat">
-                  {stats.w}×{stats.h} · {stats.fps} fps
-                </div>
-              )}
-            </>
-          ) : (
+        {/* Мои демка и камера — одновременно */}
+        {localScreen && (
+          <VideoTile stream={localScreen} name="Вы — экран" stat={stats?.screen} fsTile={fsTile} />
+        )}
+        {localCam && (
+          <VideoTile stream={localCam} name="Вы" mirrored stat={stats?.cam} fsTile={fsTile} />
+        )}
+        {!localCam && !localScreen && (
+          <div className="dc-tile">
             <div className="dc-avatar self">
               {myProfile.avatar_url ? <img src={myProfile.avatar_url} alt="" /> : initials(myProfile.display_name)}
             </div>
-          )}
-          <div className={localVideo ? 'dc-nametag' : 'dc-tile-name'}>{myProfile.display_name} (вы)</div>
-        </div>
+            <div className="dc-tile-name">{myProfile.display_name} (вы)</div>
+          </div>
+        )}
 
-        {/* Остальные участники */}
+        {/* Остальные участники: демка, камера или аватар */}
         {others.map((p) => {
           const rs = remoteStreams[p.id];
           const av = avatarOf(p);
-          const videoOn = !!rs?.videoOn;
-          return (
-            <div
-              className={videoOn ? 'dc-tile video' : 'dc-tile'}
-              key={p.id}
-              onDoubleClick={videoOn ? fsTile : undefined}
-            >
-              {videoOn ? (
-                <>
-                  <RemoteVideo stream={rs.stream} className="dc-video" />
-                  <button className="dc-fs" onClick={fsTile} title="На весь экран">
-                    <Icon name="expand" />
-                  </button>
-                </>
-              ) : (
-                <div className="dc-avatar">{av ? <img src={av} alt="" /> : initials(nameOf(p))}</div>
-              )}
-              <div className={videoOn ? 'dc-nametag' : 'dc-tile-name'}>{nameOf(p)}</div>
-            </div>
-          );
+          const name = nameOf(p);
+          const tiles = [];
+          if (rs?.screenOn) {
+            tiles.push(
+              <VideoTile key={p.id + '-scr'} stream={rs.screen} name={`${name} — экран`} fsTile={fsTile} />
+            );
+          }
+          if (rs?.camOn) {
+            tiles.push(<VideoTile key={p.id + '-cam'} stream={rs.cam} name={name} fsTile={fsTile} />);
+          }
+          if (!rs?.camOn && !rs?.screenOn) {
+            tiles.push(
+              <div className="dc-tile" key={p.id + '-av'}>
+                <div className="dc-avatar">{av ? <img src={av} alt="" /> : initials(name)}</div>
+                <div className="dc-tile-name">{name}</div>
+              </div>
+            );
+          }
+          return tiles;
         })}
       </div>
 
@@ -165,44 +161,62 @@ export default function GroupCallPanel({ callApi, myProfile, memberMap = {}, dea
         <button className={micOn ? 'dc-btn' : 'dc-btn off'} onClick={toggleMic} title="Микрофон">
           <Icon name={micOn ? 'mic' : 'micOff'} />
         </button>
-        <button
-          className={cameraOn ? 'dc-btn on' : 'dc-btn'}
-          onClick={toggleCamera}
-          title="Камера"
-        >
+        <button className={cameraOn ? 'dc-btn on' : 'dc-btn'} onClick={toggleCamera} title="Камера">
           <Icon name={cameraOn ? 'cam' : 'camOff'} />
         </button>
-        <button
-          className={screenOn ? 'dc-btn on' : 'dc-btn'}
-          onClick={toggleScreen}
-          title="Демонстрация экрана"
-        >
+        <button className={screenOn ? 'dc-btn on' : 'dc-btn'} onClick={toggleScreen} title="Демонстрация экрана">
           <Icon name="screen" />
         </button>
-        <select
-          className="dc-quality"
-          value={resolution}
-          onChange={(e) => setResolution(e.target.value)}
-          title={qualityTitle}
-        >
-          {Object.entries(RESOLUTIONS).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v.label}
-            </option>
-          ))}
-        </select>
-        <select
-          className="dc-quality"
-          value={fps}
-          onChange={(e) => setFps(e.target.value)}
-          title={qualityTitle + ' — кадры в секунду'}
-        >
-          {FPS_OPTIONS.map((f) => (
-            <option key={f} value={f}>
-              {f} fps
-            </option>
-          ))}
-        </select>
+        <span className="dc-q" title="Качество камеры">
+          <Icon name="cam" />
+          <select
+            className="dc-quality"
+            value={camRes}
+            onChange={(e) => setQuality('cam', { res: e.target.value })}
+          >
+            {Object.entries(RESOLUTIONS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="dc-quality"
+            value={camFps}
+            onChange={(e) => setQuality('cam', { fps: e.target.value })}
+          >
+            {FPS_OPTIONS.map((f) => (
+              <option key={f} value={f}>
+                {f} fps
+              </option>
+            ))}
+          </select>
+        </span>
+        <span className="dc-q" title="Качество демонстрации">
+          <Icon name="screen" />
+          <select
+            className="dc-quality"
+            value={scrRes}
+            onChange={(e) => setQuality('screen', { res: e.target.value })}
+          >
+            {Object.entries(RESOLUTIONS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="dc-quality"
+            value={scrFps}
+            onChange={(e) => setQuality('screen', { fps: e.target.value })}
+          >
+            {FPS_OPTIONS.map((f) => (
+              <option key={f} value={f}>
+                {f} fps
+              </option>
+            ))}
+          </select>
+        </span>
         <button className="dc-btn hangup" onClick={leave} title="Покинуть звонок">
           <Icon name="end" />
         </button>

@@ -900,3 +900,21 @@ button { touch-action: manipulation; }
 .dc-tile:fullscreen .dc-fs { opacity: 1; }
 .dc-tile:fullscreen .dc-nametag { font-size: 15px; }
 .dc-tile.video .dc-stat { bottom: 42px; }
+
+/* ---------- Звонок v1.4: вебка + демка одновременно ---------- */
+/* Сцена 1-на-1: сетка, чтобы влезали чужие и свои камера+демка */
+.dc-stage {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px; align-content: center; align-items: stretch;
+}
+.dc-stage .dc-tile { max-width: none; height: auto; min-height: 120px; }
+.dc-stage .dc-tile.video { aspect-ratio: 16/9; }
+.dc-grid .dc-tile.video { aspect-ratio: 16/9; height: auto; min-height: 120px; }
+
+/* Группа селекторов качества с иконкой: 🎥 камера / 🖥 демка */
+.dc-q { display: inline-flex; align-items: center; gap: 6px; color: #b5bac1; }
+.dc-q > svg { width: 18px; height: 18px; flex: none; }
+.dc-q .dc-quality { height: 36px; padding: 0 8px; font-size: 12px; }
+
+/* Панелька контролов: перенос на две строки, если не влезает */
+.dc-pill { flex-wrap: wrap; justify-content: center; max-width: calc(100% - 24px); row-gap: 6px; }

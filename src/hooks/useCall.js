@@ -61,22 +61,30 @@ function makeBeeper() {
 
 export function useCall(myId) {
   const [call, setCall] = useState(null); // { peerId, status: 'outgoing' | 'incoming' | 'active' }
-  const [remoteStream, setRemoteStream] = useState(null);
-  const [localVideo, setLocalVideo] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null); // объединённый звук собеседника
+  const [remoteCam, setRemoteCam] = useState(null); // видеопоток чужой камеры
+  const [remoteScreen, setRemoteScreen] = useState(null); // видеопоток чужой демки
+  const [remoteCamOn, setRemoteCamOn] = useState(false);
+  const [remoteScreenOn, setRemoteScreenOn] = useState(false);
+  const [localCam, setLocalCam] = useState(null);
+  const [localScreen, setLocalScreen] = useState(null);
   const [micOn, setMicOn] = useState(true);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
-  const [resolution, setResState] = useState(localStorage.getItem('chat.camRes') || 'r720');
-  const [fps, setFpsState] = useState(Number(localStorage.getItem('chat.camFps')) || 30);
-  const [stats, setStats] = useState(null);
-  const [remoteVideoOn, setRemoteVideoOn] = useState(false);
+  const [camRes, setCamResState] = useState(localStorage.getItem('chat.camRes') || 'r720');
+  const [camFps, setCamFpsState] = useState(Number(localStorage.getItem('chat.camFps')) || 30);
+  const [scrRes, setScrResState] = useState(localStorage.getItem('chat.scrRes') || 'r1080');
+  const [scrFps, setScrFpsState] = useState(Number(localStorage.getItem('chat.scrFps')) || 60);
+  const [stats, setStats] = useState(null); // { cam: {...}|null, screen: {...}|null }
 
   const pcRef = useRef(null);
   const inboxRef = useRef(null);
   const outboxRef = useRef({});
   const micStreamRef = useRef(null);
-  const videoStreamRef = useRef(null);
-  const videoSenderRef = useRef(null);
+  const camStreamRef = useRef(null); // своя камера
+  const scrStreamRef = useRef(null); // своя демонстрация
+  const camSenderRef = useRef(null);
+  const scrSenderRef = useRef(null);
   const pendingOfferRef = useRef(null);
   const pendingIceRef = useRef([]);
   const makingOfferRef = useRef(false);
@@ -91,9 +99,13 @@ export function useCall(myId) {
     ...mediaPreset(localStorage.getItem('chat.scrRes') || 'r1080', Number(localStorage.getItem('chat.scrFps')) || 60),
     key: localStorage.getItem('chat.scrRes') || 'r1080',
   });
-  // Все треки собеседника живут в одном объединённом потоке — иначе включение
-  // камеры/демки затирает поток с голосом и собеседник «немеет»
-  const remoteMergedRef = useRef(null);
+  // Входящие треки: звук — в общий поток, видео — по контейнерам камеры и демки.
+  // Иначе включение видео затирает поток с голосом и собеседник «немеет».
+  const remoteAudioRef = useRef(null);
+  const remoteCamRef = useRef(null);
+  const remoteScrRef = useRef(null);
+  const kindMapRef = useRef({}); // streamId -> 'cam' | 'screen' (из сигнала media)
+  const videoTracksRef = useRef([]); // { track, streamId, which }
   const audioCtxRef = useRef(null);
   const gainRef = useRef(null);
   const outTrackRef = useRef(null);
@@ -148,24 +160,35 @@ export function useCall(myId) {
       pcRef.current = null;
     }
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    videoStreamRef.current?.getTracks().forEach((t) => t.stop());
+    camStreamRef.current?.getTracks().forEach((t) => t.stop());
+    scrStreamRef.current?.getTracks().forEach((t) => t.stop());
     outTrackRef.current?.stop();
     outTrackRef.current = null;
     gainRef.current = null;
     audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     micStreamRef.current = null;
-    videoStreamRef.current = null;
-    videoSenderRef.current = null;
+    camStreamRef.current = null;
+    scrStreamRef.current = null;
+    camSenderRef.current = null;
+    scrSenderRef.current = null;
     pendingOfferRef.current = null;
     pendingIceRef.current = [];
     acceptedRef.current = false;
     makingOfferRef.current = false;
     peerRef.current = null;
-    remoteMergedRef.current = null;
+    remoteAudioRef.current = null;
+    remoteCamRef.current = null;
+    remoteScrRef.current = null;
+    kindMapRef.current = {};
+    videoTracksRef.current = [];
     setRemoteStream(null);
-    setRemoteVideoOn(false);
-    setLocalVideo(null);
+    setRemoteCam(null);
+    setRemoteScreen(null);
+    setRemoteCamOn(false);
+    setRemoteScreenOn(false);
+    setLocalCam(null);
+    setLocalScreen(null);
     setCameraOn(false);
     setScreenOn(false);
     setMicOn(true);
@@ -188,36 +211,105 @@ export function useCall(myId) {
     }
   }, []);
 
+  // ---------- раскладка чужих видеотреков: камера и демка — раздельно ----------
+  const hasLive = (s) =>
+    !!s && s.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted);
+
+  const syncRemoteVideo = () => {
+    setRemoteCamOn(hasLive(remoteCamRef.current));
+    setRemoteScreenOn(hasLive(remoteScrRef.current));
+  };
+
+  const placeVideoTrack = (rec) => {
+    const ref = rec.which === 'screen' ? remoteScrRef : remoteCamRef;
+    if (!ref.current) ref.current = new MediaStream();
+    if (!ref.current.getTracks().includes(rec.track)) ref.current.addTrack(rec.track);
+    if (rec.which === 'screen') setRemoteScreen(ref.current);
+    else setRemoteCam(ref.current);
+    syncRemoteVideo();
+  };
+
+  // Сигнал media расставляет уже пришедшие треки по местам
+  const reclassify = () => {
+    for (const rec of videoTracksRef.current) {
+      const want = kindMapRef.current[rec.streamId];
+      if (!want || want === rec.which) continue;
+      try {
+        remoteCamRef.current?.removeTrack(rec.track);
+        remoteScrRef.current?.removeTrack(rec.track);
+      } catch (_) {}
+      rec.which = want;
+      placeVideoTrack(rec);
+    }
+    syncRemoteVideo();
+  };
+
+  // Сообщаем собеседнику, какой поток — камера, а какой — демонстрация
+  const sendMediaSignal = useCallback(() => {
+    const peerId = peerRef.current;
+    if (!peerId) return;
+    sendTo(peerId, 'media', {
+      cam: camStreamRef.current?.id ?? null,
+      screen: scrStreamRef.current?.id ?? null,
+    });
+  }, [sendTo]);
+
   // ---------- соединение ----------
   const createPeer = useCallback(
     (peerId) => {
       const pc = new RTCPeerConnection(ICE);
       peerRef.current = peerId;
 
+      // Если камера/демка уже включены — сразу добавляем их треки
+      const camTrack = camStreamRef.current?.getVideoTracks()[0];
+      if (camTrack) {
+        camSenderRef.current = pc.addTrack(camTrack, camStreamRef.current);
+        applyBitrate(camSenderRef.current, false);
+      }
+      const scrTrack = scrStreamRef.current?.getVideoTracks()[0];
+      if (scrTrack) {
+        scrSenderRef.current = pc.addTrack(scrTrack, scrStreamRef.current);
+        applyBitrate(scrSenderRef.current, true);
+      }
+
       pc.onicecandidate = (e) => {
         if (e.candidate) sendTo(peerId, 'ice', { candidate: e.candidate.toJSON() });
       };
 
       pc.ontrack = (e) => {
-        // Голос и видео приходят разными потоками — складываем их в один общий,
-        // чтобы включение видео не затирало поток с голосом
-        let merged = remoteMergedRef.current;
-        if (!merged) {
-          merged = new MediaStream();
-          remoteMergedRef.current = merged;
+        const streamId = e.streams[0]?.id ?? '';
+        if (e.track.kind === 'audio') {
+          // Голос — в общий звуковой поток
+          if (!remoteAudioRef.current) remoteAudioRef.current = new MediaStream();
+          const a = remoteAudioRef.current;
+          if (!a.getTracks().includes(e.track)) a.addTrack(e.track);
+          setRemoteStream(a);
+          e.track.onended = () => {
+            try {
+              a.removeTrack(e.track);
+            } catch (_) {}
+          };
+          return;
         }
-        if (!merged.getTracks().includes(e.track)) merged.addTrack(e.track);
-        setRemoteStream(merged);
-        const sync = () =>
-          setRemoteVideoOn(merged.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted));
-        sync();
-        e.track.onunmute = sync;
-        e.track.onmute = sync;
+        // Видео: камера или демка? Если сигнал media ещё не пришёл —
+        // ставим в свободный слот, потом reclassify расставит по местам
+        let which = kindMapRef.current[streamId];
+        if (!which) {
+          const camBusy = hasLive(remoteCamRef.current);
+          const scrBusy = hasLive(remoteScrRef.current);
+          which = camBusy && !scrBusy ? 'screen' : !camBusy && scrBusy ? 'cam' : 'screen';
+        }
+        const rec = { track: e.track, streamId, which };
+        videoTracksRef.current.push(rec);
+        placeVideoTrack(rec);
+        e.track.onunmute = syncRemoteVideo;
+        e.track.onmute = syncRemoteVideo;
         e.track.onended = () => {
           try {
-            merged.removeTrack(e.track);
+            remoteCamRef.current?.removeTrack(e.track);
+            remoteScrRef.current?.removeTrack(e.track);
           } catch (_) {}
-          sync();
+          syncRemoteVideo();
         };
       };
 
@@ -244,7 +336,7 @@ export function useCall(myId) {
       pcRef.current = pc;
       return pc;
     },
-    [sendTo, cleanup]
+    [sendTo, cleanup, applyBitrate]
   );
 
   const addMic = useCallback(async (pc) => {
@@ -454,42 +546,35 @@ export function useCall(myId) {
     setMicOn(track.enabled);
   }, []);
 
-  const stopVideo = useCallback(async () => {
-    videoStreamRef.current?.getTracks().forEach((t) => t.stop());
-    videoStreamRef.current = null;
-    if (videoSenderRef.current) {
+  // Камера и демонстрация — два независимых потока, работают одновременно
+  const stopCamera = useCallback(async () => {
+    camStreamRef.current?.getTracks().forEach((t) => t.stop());
+    camStreamRef.current = null;
+    if (camSenderRef.current) {
       try {
-        await videoSenderRef.current.replaceTrack(null);
+        await camSenderRef.current.replaceTrack(null);
       } catch (_) {}
     }
-    setLocalVideo(null);
+    setLocalCam(null);
     setCameraOn(false);
+    sendMediaSignal();
+  }, [sendMediaSignal]);
+
+  const stopScreen = useCallback(async () => {
+    scrStreamRef.current?.getTracks().forEach((t) => t.stop());
+    scrStreamRef.current = null;
+    if (scrSenderRef.current) {
+      try {
+        await scrSenderRef.current.replaceTrack(null);
+      } catch (_) {}
+    }
+    setLocalScreen(null);
     setScreenOn(false);
-    setStats(null);
-  }, []);
-
-  const setVideoTrack = useCallback(
-    async (track, stream, isScreen) => {
-      const pc = pcRef.current;
-      if (!pc) return;
-      track.contentHint = 'motion';
-      videoStreamRef.current?.getTracks().forEach((t) => t.stop());
-      videoStreamRef.current = stream;
-
-      if (videoSenderRef.current) {
-        await videoSenderRef.current.replaceTrack(track);
-      } else {
-        videoSenderRef.current = pc.addTrack(track, stream);
-      }
-      await applyBitrate(videoSenderRef.current, isScreen);
-      setLocalVideo(stream);
-      track.onended = () => stopVideo();
-    },
-    [applyBitrate, stopVideo]
-  );
+    sendMediaSignal();
+  }, [sendMediaSignal]);
 
   const toggleCamera = useCallback(async () => {
-    if (cameraOn) return stopVideo();
+    if (cameraOn) return stopCamera();
     const p = camMediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -499,19 +584,26 @@ export function useCall(myId) {
           frameRate: { ideal: p.fps },
         },
       });
-      await setVideoTrack(stream.getVideoTracks()[0], stream, false);
+      const track = stream.getVideoTracks()[0];
+      track.contentHint = 'motion';
+      camStreamRef.current = stream;
+      const pc = pcRef.current;
+      if (pc) {
+        if (camSenderRef.current) await camSenderRef.current.replaceTrack(track);
+        else camSenderRef.current = pc.addTrack(track, stream);
+        await applyBitrate(camSenderRef.current, false);
+      }
+      track.onended = () => stopCamera();
+      setLocalCam(stream);
       setCameraOn(true);
-      setScreenOn(false);
-      // Показываем в панели пресет именно камеры
-      setResState(p.key);
-      setFpsState(p.fps);
+      sendMediaSignal();
     } catch (e) {
       alert('Камера недоступна: ' + e.message);
     }
-  }, [cameraOn, stopVideo, setVideoTrack]);
+  }, [cameraOn, stopCamera, applyBitrate, sendMediaSignal]);
 
   const toggleScreen = useCallback(async () => {
-    if (screenOn) return stopVideo();
+    if (screenOn) return stopScreen();
     const p = scrMediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -522,69 +614,73 @@ export function useCall(myId) {
         },
         audio: true,
       });
-      await setVideoTrack(stream.getVideoTracks()[0], stream, true);
+      const track = stream.getVideoTracks()[0];
+      track.contentHint = 'motion';
+      scrStreamRef.current = stream;
+      const pc = pcRef.current;
+      if (pc) {
+        if (scrSenderRef.current) await scrSenderRef.current.replaceTrack(track);
+        else scrSenderRef.current = pc.addTrack(track, stream);
+        await applyBitrate(scrSenderRef.current, true);
+      }
+      track.onended = () => stopScreen();
+      setLocalScreen(stream);
       setScreenOn(true);
-      setCameraOn(false);
-      setResState(p.key);
-      setFpsState(p.fps);
+      sendMediaSignal();
     } catch (e) {
       if (e.name !== 'NotAllowedError') alert('Демонстрация не началась: ' + e.message);
     }
-  }, [screenOn, stopVideo, setVideoTrack]);
+  }, [screenOn, stopScreen, applyBitrate, sendMediaSignal]);
 
-  const applyMediaPreset = useCallback(
-    async (isScreen) => {
-      const p = (isScreen ? scrMediaRef : camMediaRef).current;
-      const track = videoStreamRef.current?.getVideoTracks()[0];
+  // Смена качества камеры или демки — отдельно и на лету
+  const setQuality = useCallback(
+    async (target, { res, fps: fpsValue }) => {
+      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
+      const key = res ?? ref.current.key;
+      const f = Number(fpsValue) || ref.current.fps;
+      ref.current = { ...mediaPreset(key, f), key };
+      localStorage.setItem(target === 'screen' ? 'chat.scrRes' : 'chat.camRes', key);
+      localStorage.setItem(target === 'screen' ? 'chat.scrFps' : 'chat.camFps', String(f));
+      if (target === 'screen') {
+        setScrResState(key);
+        setScrFpsState(f);
+      } else {
+        setCamResState(key);
+        setCamFpsState(f);
+      }
+      // Если источник жив — применяем к текущему треку
+      const stream = target === 'screen' ? scrStreamRef.current : camStreamRef.current;
+      const sender = target === 'screen' ? scrSenderRef.current : camSenderRef.current;
+      const track = stream?.getVideoTracks()[0];
       if (!track) return;
       try {
         await track.applyConstraints({
-          width: { ideal: p.width },
-          height: { ideal: p.height },
-          frameRate: { ideal: p.fps },
+          width: { ideal: ref.current.width },
+          height: { ideal: ref.current.height },
+          frameRate: { ideal: ref.current.fps },
         });
       } catch (e) {
         console.warn('Устройство не тянет пресет:', e);
       }
-      await applyBitrate(videoSenderRef.current, isScreen);
+      await applyBitrate(sender, target === 'screen');
     },
     [applyBitrate]
   );
 
-  const setResolution = useCallback(
-    async (key) => {
-      // Пресет применяется к активному источнику: демка приоритетнее камеры
-      const target = screenOn ? 'screen' : 'camera';
-      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
-      ref.current = { ...mediaPreset(key, ref.current.fps), key };
-      localStorage.setItem(target === 'screen' ? 'chat.scrRes' : 'chat.camRes', key);
-      setResState(key);
-      await applyMediaPreset(screenOn);
-    },
-    [applyMediaPreset, screenOn]
-  );
-
-  const setFps = useCallback(
-    async (value) => {
-      const n = Number(value) || 60;
-      const target = screenOn ? 'screen' : 'camera';
-      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
-      ref.current = { ...mediaPreset(ref.current.key, n), key: ref.current.key };
-      localStorage.setItem(target === 'screen' ? 'chat.scrFps' : 'chat.camFps', String(n));
-      setFpsState(n);
-      await applyMediaPreset(screenOn);
-    },
-    [applyMediaPreset, screenOn]
-  );
-
   useEffect(() => {
-    if (!localVideo) return;
+    if (!localCam && !localScreen) {
+      setStats(null);
+      return;
+    }
+    const grab = (ref) => {
+      const s = ref.current?.getVideoTracks()[0]?.getSettings();
+      return s ? { w: s.width, h: s.height, fps: Math.round(s.frameRate ?? 0) } : null;
+    };
     const id = setInterval(() => {
-      const s = videoStreamRef.current?.getVideoTracks()[0]?.getSettings();
-      if (s) setStats({ w: s.width, h: s.height, fps: Math.round(s.frameRate ?? 0) });
+      setStats({ cam: grab(camStreamRef), screen: grab(scrStreamRef) });
     }, 1000);
     return () => clearInterval(id);
-  }, [localVideo]);
+  }, [localCam, localScreen]);
 
   // ---------- приём сигналов ----------
   const handleSignal = useCallback(
@@ -666,6 +762,16 @@ export function useCall(myId) {
       }
 
       if (event === 'hangup') cleanup();
+
+      // Собеседник сообщил, какой его поток — камера, а какой — демонстрация
+      if (event === 'media') {
+        const m = {};
+        if (payload.cam) m[payload.cam] = 'cam';
+        if (payload.screen) m[payload.screen] = 'screen';
+        kindMapRef.current = m;
+        reclassify();
+        return;
+      }
     },
     [myId, call, sendTo, answerOffer, drainIce, cleanup]
   );
@@ -678,7 +784,7 @@ export function useCall(myId) {
   // Свой личный канал — сюда приходят все сигналы
   useEffect(() => {
     if (!myId) return;
-    const events = ['ring', 'accepted', 'busy', 'offer', 'answer', 'ice', 'hangup'];
+    const events = ['ring', 'accepted', 'busy', 'offer', 'answer', 'ice', 'hangup', 'media'];
     const ch = supabase.channel(userChannel(myId), { config: { broadcast: { self: false } } });
     events.forEach((ev) =>
       ch.on('broadcast', { event: ev }, ({ payload }) => handlerRef.current(ev, payload))
@@ -699,13 +805,19 @@ export function useCall(myId) {
   return {
     call,
     remoteStream,
-    remoteVideoOn,
-    localVideo,
+    remoteCam,
+    remoteScreen,
+    remoteCamOn,
+    remoteScreenOn,
+    localCam,
+    localScreen,
     micOn,
     cameraOn,
     screenOn,
-    resolution,
-    fps,
+    camRes,
+    camFps,
+    scrRes,
+    scrFps,
     stats,
     startCall,
     acceptCall,
@@ -715,7 +827,6 @@ export function useCall(myId) {
     setMicDevice,
     toggleCamera,
     toggleScreen,
-    setResolution,
-    setFps,
+    setQuality,
   };
 }

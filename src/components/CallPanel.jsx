@@ -23,41 +23,56 @@ const Icon = ({ name }) => (
   </svg>
 );
 
+// Одна видеоплитка: поток + имя + кнопка фуллскрина
+function VideoTile({ stream, name, mirrored, stat, fsTile }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && ref.current.srcObject !== stream) ref.current.srcObject = stream ?? null;
+  }, [stream]);
+  return (
+    <div className="dc-tile video" onDoubleClick={fsTile}>
+      <video ref={ref} autoPlay playsInline muted className={mirrored ? 'dc-video mirrored' : 'dc-video'} />
+      <button className="dc-fs" onClick={fsTile} title="На весь экран">
+        <Icon name="expand" />
+      </button>
+      <div className="dc-nametag">{name}</div>
+      {stat && (
+        <div className="dc-stat">
+          {stat.w}×{stat.h} · {stat.fps} fps
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CallPanel({ callApi, peerName, myName, deafened, volume = 100 }) {
   const {
     call,
     remoteStream,
-    remoteVideoOn,
-    localVideo,
+    remoteCam,
+    remoteScreen,
+    remoteCamOn,
+    remoteScreenOn,
+    localCam,
+    localScreen,
     micOn,
     cameraOn,
     screenOn,
-    resolution,
-    fps,
+    camRes,
+    camFps,
+    scrRes,
+    scrFps,
     stats,
     acceptCall,
     endCall,
     toggleMic,
     toggleCamera,
     toggleScreen,
-    setResolution,
-    setFps,
+    setQuality,
   } = callApi;
 
-  const remoteRef = useRef(null);
-  const localRef = useRef(null);
   const audioRef = useRef(null);
   const [soundBlocked, setSoundBlocked] = useState(false);
-
-  useEffect(() => {
-    if (remoteRef.current && remoteRef.current.srcObject !== remoteStream) {
-      remoteRef.current.srcObject = remoteStream ?? null;
-    }
-  }, [remoteStream, remoteVideoOn]);
-
-  useEffect(() => {
-    if (localRef.current) localRef.current.srcObject = localVideo ?? null;
-  }, [localVideo]);
 
   // Звук собеседника — отдельным элементом, так надёжнее
   useEffect(() => {
@@ -111,9 +126,9 @@ export default function CallPanel({ callApi, peerName, myName, deafened, volume 
 
   const incoming = call.status === 'incoming';
   const active = call.status === 'active';
-  const hasVideo = remoteVideoOn || !!localVideo;
-  // Пресеты показывают качество активного источника: демка приоритетнее камеры
-  const qualityTitle = screenOn ? 'Качество демонстрации' : 'Качество камеры';
+  const hasVideo = remoteCamOn || remoteScreenOn || !!localCam || !!localScreen;
+  const noRemoteVideo = !remoteCamOn && !remoteScreenOn;
+  const noLocalVideo = !localCam && !localScreen;
 
   return (
     <div className={hasVideo ? 'dc-panel tall' : 'dc-panel'}>
@@ -126,53 +141,35 @@ export default function CallPanel({ callApi, peerName, myName, deafened, volume 
       )}
 
       <div className="dc-stage">
-        <div className={remoteVideoOn ? 'dc-tile video' : 'dc-tile'} onDoubleClick={remoteVideoOn ? fsTile : undefined}>
-          {remoteVideoOn ? (
-            <>
-              <video ref={remoteRef} autoPlay playsInline muted className="dc-video" />
-              <button className="dc-fs" onClick={fsTile} title="На весь экран">
-                <Icon name="expand" />
-              </button>
-              <div className="dc-nametag">{peerName}</div>
-            </>
-          ) : (
-            <>
-              <div className={active ? 'dc-avatar' : 'dc-avatar ringing'}>{initials(peerName)}</div>
-              <div className="dc-tile-name">
-                {peerName}
-                {!active && <span className="dc-sub">{incoming ? 'Входящий звонок' : 'Вызываем…'}</span>}
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className={localVideo ? 'dc-tile video' : 'dc-tile'} onDoubleClick={localVideo ? fsTile : undefined}>
-          {localVideo ? (
-            <>
-              <video
-                ref={localRef}
-                autoPlay
-                playsInline
-                muted
-                className={screenOn ? 'dc-video' : 'dc-video mirrored'}
-              />
-              <button className="dc-fs" onClick={fsTile} title="На весь экран">
-                <Icon name="expand" />
-              </button>
-              <div className="dc-nametag">{myName} (вы)</div>
-              {stats && (
-                <div className="dc-stat">
-                  {stats.w}×{stats.h} · {stats.fps} fps
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="dc-avatar self">{initials(myName)}</div>
-              <div className="dc-tile-name">{myName}</div>
-            </>
-          )}
-        </div>
+        {/* Демонстрация собеседника — самая большая плитка */}
+        {remoteScreenOn && (
+          <VideoTile stream={remoteScreen} name={`${peerName} — экран`} fsTile={fsTile} />
+        )}
+        {/* Камера собеседника */}
+        {remoteCamOn && <VideoTile stream={remoteCam} name={peerName} fsTile={fsTile} />}
+        {/* Аватар, если у собеседника нет видео */}
+        {noRemoteVideo && (
+          <div className="dc-tile">
+            <div className={active ? 'dc-avatar' : 'dc-avatar ringing'}>{initials(peerName)}</div>
+            <div className="dc-tile-name">
+              {peerName}
+              {!active && <span className="dc-sub">{incoming ? 'Входящий звонок' : 'Вызываем…'}</span>}
+            </div>
+          </div>
+        )}
+        {/* Мои демка и камера — одновременно */}
+        {localScreen && (
+          <VideoTile stream={localScreen} name="Вы — экран" stat={stats?.screen} fsTile={fsTile} />
+        )}
+        {localCam && (
+          <VideoTile stream={localCam} name="Вы" mirrored stat={stats?.cam} fsTile={fsTile} />
+        )}
+        {noLocalVideo && (
+          <div className="dc-tile">
+            <div className="dc-avatar self">{initials(myName)}</div>
+            <div className="dc-tile-name">{myName}</div>
+          </div>
+        )}
       </div>
 
       <div className="dc-pill">
@@ -206,30 +203,56 @@ export default function CallPanel({ callApi, peerName, myName, deafened, volume 
             >
               <Icon name="screen" />
             </button>
-            <select
-              className="dc-quality"
-              value={resolution}
-              onChange={(e) => setResolution(e.target.value)}
-              title={qualityTitle}
-            >
-              {Object.entries(RESOLUTIONS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
-            <select
-              className="dc-quality"
-              value={fps}
-              onChange={(e) => setFps(e.target.value)}
-              title={qualityTitle + ' — кадры в секунду'}
-            >
-              {FPS_OPTIONS.map((f) => (
-                <option key={f} value={f}>
-                  {f} fps
-                </option>
-              ))}
-            </select>
+            <span className="dc-q" title="Качество камеры">
+              <Icon name="cam" />
+              <select
+                className="dc-quality"
+                value={camRes}
+                onChange={(e) => setQuality('cam', { res: e.target.value })}
+              >
+                {Object.entries(RESOLUTIONS).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="dc-quality"
+                value={camFps}
+                onChange={(e) => setQuality('cam', { fps: e.target.value })}
+              >
+                {FPS_OPTIONS.map((f) => (
+                  <option key={f} value={f}>
+                    {f} fps
+                  </option>
+                ))}
+              </select>
+            </span>
+            <span className="dc-q" title="Качество демонстрации">
+              <Icon name="screen" />
+              <select
+                className="dc-quality"
+                value={scrRes}
+                onChange={(e) => setQuality('screen', { res: e.target.value })}
+              >
+                {Object.entries(RESOLUTIONS).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="dc-quality"
+                value={scrFps}
+                onChange={(e) => setQuality('screen', { fps: e.target.value })}
+              >
+                {FPS_OPTIONS.map((f) => (
+                  <option key={f} value={f}>
+                    {f} fps
+                  </option>
+                ))}
+              </select>
+            </span>
             <button className="dc-btn hangup" onClick={endCall} title="Завершить">
               <Icon name="end" />
             </button>

@@ -19,22 +19,29 @@ const hasLiveVideo = (stream) =>
 // Новый участник шлёт hello, остальные отвечают ему offer'ами.
 export function useGroupCall(myId, myName) {
   const [call, setCall] = useState(null); // { roomId, status: 'active' }
-  const [remoteStreams, setRemoteStreams] = useState({}); // peerId -> { stream, videoOn }
+  // peerId -> { audio, cam, screen, camOn, screenOn }
+  const [remoteStreams, setRemoteStreams] = useState({});
   const [participants, setParticipants] = useState([]); // [{ id, name }] из presence
-  const [localVideo, setLocalVideo] = useState(null);
+  const [localCam, setLocalCam] = useState(null);
+  const [localScreen, setLocalScreen] = useState(null);
   const [micOn, setMicOn] = useState(true);
   const [cameraOn, setCameraOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
-  const [resolution, setResState] = useState(localStorage.getItem('chat.camRes') || 'r720');
-  const [fps, setFpsState] = useState(Number(localStorage.getItem('chat.camFps')) || 30);
-  const [stats, setStats] = useState(null);
+  const [camRes, setCamResState] = useState(localStorage.getItem('chat.camRes') || 'r720');
+  const [camFps, setCamFpsState] = useState(Number(localStorage.getItem('chat.camFps')) || 30);
+  const [scrRes, setScrResState] = useState(localStorage.getItem('chat.scrRes') || 'r1080');
+  const [scrFps, setScrFpsState] = useState(Number(localStorage.getItem('chat.scrFps')) || 60);
+  const [stats, setStats] = useState(null); // { cam: {...}|null, screen: {...}|null }
 
-  const peersRef = useRef({}); // peerId -> { pc, makingOffer, pendingIce, videoSender }
+  // peerId -> { pc, makingOffer, pendingIce, camSender, scrSender,
+  //             audioC, camC, scrC, kindMap, vTracks }
+  const peersRef = useRef({});
   const channelRef = useRef(null);
   const micStreamRef = useRef(null);
   const outStreamRef = useRef(null);
   const outTrackRef = useRef(null);
-  const videoStreamRef = useRef(null);
+  const camStreamRef = useRef(null); // своя камера
+  const scrStreamRef = useRef(null); // своя демонстрация
   const audioCtxRef = useRef(null);
   const gainRef = useRef(null);
   // Пресеты качества запоминаются отдельно для камеры и демонстрации
@@ -98,22 +105,82 @@ export function useGroupCall(myId, myName) {
     }
   }, []);
 
+  // ---------- раскладка видео участника: камера и демка — раздельно ----------
+  const syncPeerVideo = (peerId, entry) => {
+    setRemoteStreams((m) =>
+      m[peerId]
+        ? {
+            ...m,
+            [peerId]: {
+              ...m[peerId],
+              cam: entry.camC ?? null,
+              screen: entry.scrC ?? null,
+              camOn: hasLiveVideo(entry.camC),
+              screenOn: hasLiveVideo(entry.scrC),
+            },
+          }
+        : m
+    );
+  };
+
+  const placePeerVideo = (peerId, entry, rec) => {
+    if (rec.which === 'screen') {
+      if (!entry.scrC) entry.scrC = new MediaStream();
+      if (!entry.scrC.getTracks().includes(rec.track)) entry.scrC.addTrack(rec.track);
+    } else {
+      if (!entry.camC) entry.camC = new MediaStream();
+      if (!entry.camC.getTracks().includes(rec.track)) entry.camC.addTrack(rec.track);
+    }
+    syncPeerVideo(peerId, entry);
+  };
+
+  // Сигнал media от участника: какой его поток — камера, а какой — демка
+  const reclassifyPeer = (peerId, entry) => {
+    for (const rec of entry.vTracks) {
+      const want = entry.kindMap[rec.streamId];
+      if (!want || want === rec.which) continue;
+      try {
+        entry.camC?.removeTrack(rec.track);
+        entry.scrC?.removeTrack(rec.track);
+      } catch (_) {}
+      rec.which = want;
+      placePeerVideo(peerId, entry, rec);
+    }
+    syncPeerVideo(peerId, entry);
+  };
+
   const createPeer = useCallback(
     (peerId) => {
       const existing = peersRef.current[peerId];
       if (existing) return existing;
 
       const pc = new RTCPeerConnection(ICE);
-      const entry = { pc, makingOffer: false, pendingIce: [], videoSender: null };
+      const entry = {
+        pc,
+        makingOffer: false,
+        pendingIce: [],
+        camSender: null,
+        scrSender: null,
+        audioC: null, // объединённый звук участника
+        camC: null, // контейнер его камеры
+        scrC: null, // контейнер его демонстрации
+        kindMap: {}, // streamId -> 'cam' | 'screen' (из сигнала media)
+        vTracks: [], // { track, streamId, which }
+      };
       peersRef.current[peerId] = entry;
 
       // Сразу добавляем свои треки — это запустит onnegotiationneeded
       const aTrack = outTrackRef.current;
       if (aTrack && outStreamRef.current) pc.addTrack(aTrack, outStreamRef.current);
-      const vTrack = videoStreamRef.current?.getVideoTracks()[0];
-      if (vTrack && videoStreamRef.current) {
-        entry.videoSender = pc.addTrack(vTrack, videoStreamRef.current);
-        applyBitrate(entry.videoSender, screenOnRef.current);
+      const camTrack = camStreamRef.current?.getVideoTracks()[0];
+      if (camTrack) {
+        entry.camSender = pc.addTrack(camTrack, camStreamRef.current);
+        applyBitrate(entry.camSender, false);
+      }
+      const scrTrack = scrStreamRef.current?.getVideoTracks()[0];
+      if (scrTrack) {
+        entry.scrSender = pc.addTrack(scrTrack, scrStreamRef.current);
+        applyBitrate(entry.scrSender, true);
       }
 
       pc.onicecandidate = (e) => {
@@ -121,25 +188,43 @@ export function useGroupCall(myId, myName) {
       };
 
       pc.ontrack = (e) => {
-        // Голос и видео участника приходят разными потоками — объединяем,
-        // чтобы включение видео не затирало поток с голосом
-        const ent = peersRef.current[peerId];
-        if (!ent) return;
-        if (!ent.merged) ent.merged = new MediaStream();
-        const merged = ent.merged;
-        if (!merged.getTracks().includes(e.track)) merged.addTrack(e.track);
-        setRemoteStreams((m) => ({ ...m, [peerId]: { stream: merged, videoOn: hasLiveVideo(merged) } }));
-        const sync = () =>
+        const streamId = e.streams[0]?.id ?? '';
+        if (e.track.kind === 'audio') {
+          // Голос — в общий звуковой поток участника
+          if (!entry.audioC) entry.audioC = new MediaStream();
+          const a = entry.audioC;
+          if (!a.getTracks().includes(e.track)) a.addTrack(e.track);
           setRemoteStreams((m) =>
-            m[peerId] ? { ...m, [peerId]: { ...m[peerId], videoOn: hasLiveVideo(merged) } } : m
+            m[peerId]
+              ? { ...m, [peerId]: { ...m[peerId], audio: a } }
+              : { ...m, [peerId]: { audio: a, cam: null, screen: null, camOn: false, screenOn: false } }
           );
-        e.track.onunmute = sync;
-        e.track.onmute = sync;
+          e.track.onended = () => {
+            try {
+              a.removeTrack(e.track);
+            } catch (_) {}
+          };
+          return;
+        }
+        // Видео: камера или демка? Если сигнал media ещё не пришёл —
+        // ставим в свободный слот, потом media расставит по местам
+        let which = entry.kindMap[streamId];
+        if (!which) {
+          const camBusy = hasLiveVideo(entry.camC);
+          const scrBusy = hasLiveVideo(entry.scrC);
+          which = camBusy && !scrBusy ? 'screen' : !camBusy && scrBusy ? 'cam' : 'screen';
+        }
+        const rec = { track: e.track, streamId, which };
+        entry.vTracks.push(rec);
+        placePeerVideo(peerId, entry, rec);
+        e.track.onunmute = () => syncPeerVideo(peerId, entry);
+        e.track.onmute = () => syncPeerVideo(peerId, entry);
         e.track.onended = () => {
           try {
-            merged.removeTrack(e.track);
+            entry.camC?.removeTrack(e.track);
+            entry.scrC?.removeTrack(e.track);
           } catch (_) {}
-          sync();
+          syncPeerVideo(peerId, entry);
         };
       };
 
@@ -193,7 +278,14 @@ export function useGroupCall(myId, myName) {
 
       if (event === 'hello') {
         // Новый участник зашёл в звонок — создаём соединение, оффер уйдёт сам
-        if (channelRef.current) createPeer(from);
+        if (channelRef.current) {
+          createPeer(from);
+          // Сообщаем новичку, какой наш поток — камера, а какой — демка
+          send('media', {
+            cam: camStreamRef.current?.id ?? null,
+            screen: scrStreamRef.current?.id ?? null,
+          });
+        }
         return;
       }
 
@@ -244,6 +336,18 @@ export function useGroupCall(myId, myName) {
       }
 
       if (event === 'leave') closePeer(from);
+
+      // Участник сообщил, какой его поток — камера, а какой — демонстрация
+      if (event === 'media') {
+        const entry = peersRef.current[from];
+        if (!entry) return;
+        const m = {};
+        if (payload.cam) m[payload.cam] = 'cam';
+        if (payload.screen) m[payload.screen] = 'screen';
+        entry.kindMap = m;
+        reclassifyPeer(from, entry);
+        return;
+      }
     },
     [myId, createPeer, closePeer, send]
   );
@@ -257,7 +361,8 @@ export function useGroupCall(myId, myName) {
   const cleanup = useCallback(() => {
     Object.keys(peersRef.current).forEach(closePeer);
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    videoStreamRef.current?.getTracks().forEach((t) => t.stop());
+    camStreamRef.current?.getTracks().forEach((t) => t.stop());
+    scrStreamRef.current?.getTracks().forEach((t) => t.stop());
     outTrackRef.current?.stop();
     outTrackRef.current = null;
     outStreamRef.current = null;
@@ -265,7 +370,8 @@ export function useGroupCall(myId, myName) {
     audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     micStreamRef.current = null;
-    videoStreamRef.current = null;
+    camStreamRef.current = null;
+    scrStreamRef.current = null;
     if (channelRef.current) {
       const ch = channelRef.current;
       channelRef.current = null;
@@ -274,7 +380,8 @@ export function useGroupCall(myId, myName) {
     }
     setRemoteStreams({});
     setParticipants([]);
-    setLocalVideo(null);
+    setLocalCam(null);
+    setLocalScreen(null);
     setCameraOn(false);
     setScreenOn(false);
     setMicOn(true);
@@ -345,7 +452,7 @@ export function useGroupCall(myId, myName) {
         const ch = supabase.channel(roomChannel(roomId), {
           config: { broadcast: { self: false }, presence: { key: myId } },
         });
-        ['hello', 'offer', 'answer', 'ice', 'leave'].forEach((ev) =>
+        ['hello', 'offer', 'answer', 'ice', 'leave', 'media'].forEach((ev) =>
           ch.on('broadcast', { event: ev }, ({ payload }) => handlerRef.current(ev, payload))
         );
         ch.on('presence', { event: 'sync' }, () => {
@@ -464,43 +571,48 @@ export function useGroupCall(myId, myName) {
     setMicOn(track.enabled);
   }, []);
 
-  const stopVideo = useCallback(async () => {
-    videoStreamRef.current?.getTracks().forEach((t) => t.stop());
-    videoStreamRef.current = null;
+  // Сообщаем всем участникам, какой наш поток — камера, а какой — демка
+  const sendMediaSignal = useCallback(() => {
+    if (!channelRef.current) return;
+    send('media', {
+      cam: camStreamRef.current?.id ?? null,
+      screen: scrStreamRef.current?.id ?? null,
+    });
+  }, [send]);
+
+  // Камера и демонстрация — два независимых потока, работают одновременно
+  const stopCamera = useCallback(async () => {
+    camStreamRef.current?.getTracks().forEach((t) => t.stop());
+    camStreamRef.current = null;
     for (const entry of Object.values(peersRef.current)) {
-      if (entry.videoSender) {
+      if (entry.camSender) {
         try {
-          await entry.videoSender.replaceTrack(null);
+          await entry.camSender.replaceTrack(null);
         } catch (_) {}
       }
     }
-    setLocalVideo(null);
+    setLocalCam(null);
     setCameraOn(false);
-    setScreenOn(false);
-    setStats(null);
-  }, []);
+    sendMediaSignal();
+  }, [sendMediaSignal]);
 
-  const setVideoTrack = useCallback(
-    async (track, stream, isScreen) => {
-      track.contentHint = 'motion';
-      videoStreamRef.current?.getTracks().forEach((t) => t.stop());
-      videoStreamRef.current = stream;
-      for (const entry of Object.values(peersRef.current)) {
-        if (entry.videoSender) {
-          await entry.videoSender.replaceTrack(track);
-        } else {
-          entry.videoSender = entry.pc.addTrack(track, stream);
-        }
-        await applyBitrate(entry.videoSender, isScreen);
+  const stopScreen = useCallback(async () => {
+    scrStreamRef.current?.getTracks().forEach((t) => t.stop());
+    scrStreamRef.current = null;
+    for (const entry of Object.values(peersRef.current)) {
+      if (entry.scrSender) {
+        try {
+          await entry.scrSender.replaceTrack(null);
+        } catch (_) {}
       }
-      setLocalVideo(stream);
-      track.onended = () => stopVideo();
-    },
-    [applyBitrate, stopVideo]
-  );
+    }
+    setLocalScreen(null);
+    setScreenOn(false);
+    sendMediaSignal();
+  }, [sendMediaSignal]);
 
   const toggleCamera = useCallback(async () => {
-    if (cameraOn) return stopVideo();
+    if (cameraOn) return stopCamera();
     const p = camMediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -510,19 +622,25 @@ export function useGroupCall(myId, myName) {
           frameRate: { ideal: p.fps },
         },
       });
-      await setVideoTrack(stream.getVideoTracks()[0], stream, false);
+      const track = stream.getVideoTracks()[0];
+      track.contentHint = 'motion';
+      camStreamRef.current = stream;
+      for (const entry of Object.values(peersRef.current)) {
+        if (entry.camSender) await entry.camSender.replaceTrack(track);
+        else entry.camSender = entry.pc.addTrack(track, stream);
+        await applyBitrate(entry.camSender, false);
+      }
+      track.onended = () => stopCamera();
+      setLocalCam(stream);
       setCameraOn(true);
-      setScreenOn(false);
-      // Показываем в панели пресет именно камеры
-      setResState(p.key);
-      setFpsState(p.fps);
+      sendMediaSignal();
     } catch (e) {
       alert('Камера недоступна: ' + e.message);
     }
-  }, [cameraOn, stopVideo, setVideoTrack]);
+  }, [cameraOn, stopCamera, applyBitrate, sendMediaSignal]);
 
   const toggleScreen = useCallback(async () => {
-    if (screenOn) return stopVideo();
+    if (screenOn) return stopScreen();
     const p = scrMediaRef.current;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -533,83 +651,90 @@ export function useGroupCall(myId, myName) {
         },
         audio: true,
       });
-      await setVideoTrack(stream.getVideoTracks()[0], stream, true);
+      const track = stream.getVideoTracks()[0];
+      track.contentHint = 'motion';
+      scrStreamRef.current = stream;
+      for (const entry of Object.values(peersRef.current)) {
+        if (entry.scrSender) await entry.scrSender.replaceTrack(track);
+        else entry.scrSender = entry.pc.addTrack(track, stream);
+        await applyBitrate(entry.scrSender, true);
+      }
+      track.onended = () => stopScreen();
+      setLocalScreen(stream);
       setScreenOn(true);
-      setCameraOn(false);
-      setResState(p.key);
-      setFpsState(p.fps);
+      sendMediaSignal();
     } catch (e) {
       if (e.name !== 'NotAllowedError') alert('Демонстрация не началась: ' + e.message);
     }
-  }, [screenOn, stopVideo, setVideoTrack]);
+  }, [screenOn, stopScreen, applyBitrate, sendMediaSignal]);
 
-  const applyMediaPreset = useCallback(
-    async (isScreen) => {
-      const p = (isScreen ? scrMediaRef : camMediaRef).current;
-      const track = videoStreamRef.current?.getVideoTracks()[0];
-      if (!track) return;
-      try {
-        await track.applyConstraints({
-          width: { ideal: p.width },
-          height: { ideal: p.height },
-          frameRate: { ideal: p.fps },
-        });
-      } catch (e) {
-        console.warn('Устройство не тянет пресет:', e);
+  // Смена качества камеры или демки — отдельно и на лету
+  const setQuality = useCallback(
+    async (target, { res, fps: fpsValue }) => {
+      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
+      const key = res ?? ref.current.key;
+      const f = Number(fpsValue) || ref.current.fps;
+      ref.current = { ...mediaPreset(key, f), key };
+      localStorage.setItem(target === 'screen' ? 'chat.scrRes' : 'chat.camRes', key);
+      localStorage.setItem(target === 'screen' ? 'chat.scrFps' : 'chat.camFps', String(f));
+      if (target === 'screen') {
+        setScrResState(key);
+        setScrFpsState(f);
+      } else {
+        setCamResState(key);
+        setCamFpsState(f);
+      }
+      // Если источник жив — применяем к текущему треку
+      const stream = target === 'screen' ? scrStreamRef.current : camStreamRef.current;
+      const senderKey = target === 'screen' ? 'scrSender' : 'camSender';
+      const track = stream?.getVideoTracks()[0];
+      if (track) {
+        try {
+          await track.applyConstraints({
+            width: { ideal: ref.current.width },
+            height: { ideal: ref.current.height },
+            frameRate: { ideal: ref.current.fps },
+          });
+        } catch (e) {
+          console.warn('Устройство не тянет пресет:', e);
+        }
       }
       for (const entry of Object.values(peersRef.current)) {
-        await applyBitrate(entry.videoSender, isScreen);
+        await applyBitrate(entry[senderKey], target === 'screen');
       }
     },
     [applyBitrate]
   );
 
-  const setResolution = useCallback(
-    async (key) => {
-      // Пресет применяется к активному источнику: демка приоритетнее камеры
-      const target = screenOnRef.current ? 'screen' : 'camera';
-      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
-      ref.current = { ...mediaPreset(key, ref.current.fps), key };
-      localStorage.setItem(target === 'screen' ? 'chat.scrRes' : 'chat.camRes', key);
-      setResState(key);
-      await applyMediaPreset(screenOnRef.current);
-    },
-    [applyMediaPreset]
-  );
-
-  const setFps = useCallback(
-    async (value) => {
-      const n = Number(value) || 60;
-      const target = screenOnRef.current ? 'screen' : 'camera';
-      const ref = target === 'screen' ? scrMediaRef : camMediaRef;
-      ref.current = { ...mediaPreset(ref.current.key, n), key: ref.current.key };
-      localStorage.setItem(target === 'screen' ? 'chat.scrFps' : 'chat.camFps', String(n));
-      setFpsState(n);
-      await applyMediaPreset(screenOnRef.current);
-    },
-    [applyMediaPreset]
-  );
-
-  // Статистика по своему видео
+  // Статистика по своим видео
   useEffect(() => {
-    if (!localVideo) return;
+    if (!localCam && !localScreen) {
+      setStats(null);
+      return;
+    }
+    const grab = (ref) => {
+      const s = ref.current?.getVideoTracks()[0]?.getSettings();
+      return s ? { w: s.width, h: s.height, fps: Math.round(s.frameRate ?? 0) } : null;
+    };
     const id = setInterval(() => {
-      const s = videoStreamRef.current?.getVideoTracks()[0]?.getSettings();
-      if (s) setStats({ w: s.width, h: s.height, fps: Math.round(s.frameRate ?? 0) });
+      setStats({ cam: grab(camStreamRef), screen: grab(scrStreamRef) });
     }, 1000);
     return () => clearInterval(id);
-  }, [localVideo]);
+  }, [localCam, localScreen]);
 
   return {
     call,
     participants,
     remoteStreams,
-    localVideo,
+    localCam,
+    localScreen,
     micOn,
     cameraOn,
     screenOn,
-    resolution,
-    fps,
+    camRes,
+    camFps,
+    scrRes,
+    scrFps,
     stats,
     join,
     leave,
@@ -618,7 +743,6 @@ export function useGroupCall(myId, myName) {
     setMicDevice,
     toggleCamera,
     toggleScreen,
-    setResolution,
-    setFps,
+    setQuality,
   };
 }
